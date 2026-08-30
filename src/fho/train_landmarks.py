@@ -8,6 +8,7 @@ evaluate.py (``--source yolo`` vs ``--source gt``): the difference between the t
 is the error stage 1 contributes to the final angle, and reporting it separately
 is the only way to know which stage to work on.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -20,7 +21,7 @@ from torch.utils.data import DataLoader, Dataset
 
 from . import geometry as G
 from .focus import load_split
-from .landmarks import K, CropSpec, make_example
+from .landmarks import CropSpec, K, make_example
 from .model import LandmarkNet, Loss, axial_angle_from_coords
 
 STRIDE = 4
@@ -39,17 +40,20 @@ class FocusCrops(Dataset):
         s = self.samples[i]
         if self.train:
             ex = make_example(
-                s, self.spec, jitter=self.rng,
+                s,
+                self.spec,
+                jitter=self.rng,
                 rot_deg=float(self.rng.uniform(-180, 180)),
-                gain=(float(np.exp(self.rng.normal(0, 0.20))),
-                      float(self.rng.normal(0, 0.05))),
+                gain=(float(np.exp(self.rng.normal(0, 0.20))), float(self.rng.normal(0, 0.05))),
                 flip=bool(self.rng.random() < 0.5),
             )
         else:
             ex = make_example(s, self.spec)
-        return (torch.from_numpy(ex["image"])[None],
-                torch.from_numpy(ex["landmarks"] / STRIDE),
-                torch.tensor(ex["gt_angle"], dtype=torch.float32))
+        return (
+            torch.from_numpy(ex["image"])[None],
+            torch.from_numpy(ex["landmarks"] / STRIDE),
+            torch.tensor(ex["gt_angle"], dtype=torch.float32),
+        )
 
 
 def angles_from_coords(coords: torch.Tensor) -> np.ndarray:
@@ -61,27 +65,43 @@ def angles_from_coords(coords: torch.Tensor) -> np.ndarray:
 def evaluate(model, loader, device) -> dict:
     model.eval()
     errs, preds, gts = [], [], []
-    for x, xy_t, gt in loader:
+    for x, _xy_t, gt in loader:
         _, coords = model(x.to(device))
         a = angles_from_coords(coords)
         errs.append(G.angdiff_axial(a, gt.numpy()))
         preds.append(a)
         gts.append(gt.numpy())
     e = np.concatenate(errs)
-    return dict(median=float(np.median(e)), mean=float(e.mean()),
-                p90=float(np.percentile(e, 90)), max=float(e.max()),
-                frac_gt10=float(np.mean(e > 10)),
-                preds=np.concatenate(preds).tolist(), gts=np.concatenate(gts).tolist())
+    return dict(
+        median=float(np.median(e)),
+        mean=float(e.mean()),
+        p90=float(np.percentile(e, 90)),
+        max=float(e.max()),
+        frac_gt10=float(np.mean(e > 10)),
+        preds=np.concatenate(preds).tolist(),
+        gts=np.concatenate(gts).tolist(),
+    )
 
 
 def main(a):
-    device = ("mps" if torch.backends.mps.is_available()
-              else "cuda" if torch.cuda.is_available() else "cpu")
+    device = (
+        "mps"
+        if torch.backends.mps.is_available()
+        else "cuda"
+        if torch.cuda.is_available()
+        else "cpu"
+    )
     spec = CropSpec(size=a.size, margin=a.margin)
-    tr = DataLoader(FocusCrops(a.raw, "train", spec, True), batch_size=a.batch,
-                    shuffle=True, num_workers=a.workers, drop_last=True)
-    va = DataLoader(FocusCrops(a.raw, "val", spec, False), batch_size=a.batch,
-                    num_workers=a.workers)
+    tr = DataLoader(
+        FocusCrops(a.raw, "train", spec, True),
+        batch_size=a.batch,
+        shuffle=True,
+        num_workers=a.workers,
+        drop_last=True,
+    )
+    va = DataLoader(
+        FocusCrops(a.raw, "val", spec, False), batch_size=a.batch, num_workers=a.workers
+    )
 
     model = LandmarkNet(K, a.width).to(device)
     crit = Loss()
@@ -107,17 +127,22 @@ def main(a):
                 run[k] = run.get(k, 0.0) + v / len(tr)
         if ep % a.eval_every == 0 or ep == a.epochs:
             m = evaluate(model, va, device)
-            history.append(dict(epoch=ep, **{k: m[k] for k in
-                                             ("median", "mean", "p90", "frac_gt10")}, **run))
-            print(f"ep {ep:4d}  xy {run['xy']:.3f}  ang {run['ang']:.4f}  dir {run['dir']:.4f}  |  "
-                  f"val median {m['median']:5.2f}°  p90 {m['p90']:6.2f}°  "
-                  f">10° {100*m['frac_gt10']:4.1f}%")
+            history.append(
+                dict(epoch=ep, **{k: m[k] for k in ("median", "mean", "p90", "frac_gt10")}, **run)
+            )
+            print(
+                f"ep {ep:4d}  xy {run['xy']:.3f}  ang {run['ang']:.4f}  dir {run['dir']:.4f}  |  "
+                f"val median {m['median']:5.2f}°  p90 {m['p90']:6.2f}°  "
+                f">10° {100 * m['frac_gt10']:4.1f}%"
+            )
             if m["median"] < best:
                 best = m["median"]
-                torch.save(dict(model=model.state_dict(), spec=vars(spec),
-                                width=a.width, val_median=best), out / "landmarks_best.pt")
+                torch.save(
+                    dict(model=model.state_dict(), spec=vars(spec), width=a.width, val_median=best),
+                    out / "landmarks_best.pt",
+                )
     (out / "history.json").write_text(json.dumps(history, indent=1))
-    print(f"best val median angular error: {best:.2f}°   -> {out/'landmarks_best.pt'}")
+    print(f"best val median angular error: {best:.2f}°   -> {out / 'landmarks_best.pt'}")
 
 
 if __name__ == "__main__":

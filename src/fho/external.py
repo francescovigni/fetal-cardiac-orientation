@@ -19,6 +19,7 @@ manufacturer, which is the axis that matters for a machine-agnostic claim.
 Data: FETAL_PLANES_DB, Zenodo 3904280, CC-BY-4.0, 12,400 images, of which 1,718
 are labelled 'Fetal thorax' (the four-chamber plane).
 """
+
 from __future__ import annotations
 
 import argparse
@@ -39,6 +40,7 @@ THORAX = "Fetal thorax"
 # data                                                                         #
 # --------------------------------------------------------------------------- #
 
+
 def load_index(root: Path, plane: str = THORAX) -> list[dict]:
     with open(root / "FETAL_PLANES_DB_data.csv") as f:
         rows = list(csv.DictReader(f, delimiter=";"))
@@ -49,9 +51,14 @@ def load_index(root: Path, plane: str = THORAX) -> list[dict]:
         name = r["Image_name"].strip()
         p = root / "Images" / f"{name}.png"
         if p.exists():
-            out.append(dict(path=p, machine=r["US_Machine"].strip(),
-                            operator=r["Operator"].strip(),
-                            patient=r["Patient_num"].strip()))
+            out.append(
+                dict(
+                    path=p,
+                    machine=r["US_Machine"].strip(),
+                    operator=r["Operator"].strip(),
+                    patient=r["Patient_num"].strip(),
+                )
+            )
     return out
 
 
@@ -59,10 +66,11 @@ def load_index(root: Path, plane: str = THORAX) -> list[dict]:
 # stage 1: detection, which also gives the firing rate for free                #
 # --------------------------------------------------------------------------- #
 
+
 def load_detector(weights: Path, repo: Path):
     import torch
-    model = torch.hub.load(str(repo), "custom", path=str(weights),
-                           source="local", verbose=False)
+
+    model = torch.hub.load(str(repo), "custom", path=str(weights), source="local", verbose=False)
     model.conf = 0.25
     return model
 
@@ -81,8 +89,10 @@ def detect_cardiac(det, path: Path):
 # stage 2 + the label-free properties                                          #
 # --------------------------------------------------------------------------- #
 
+
 def load_landmark_model(ckpt: Path):
     import torch
+
     from .landmarks import K
     from .model import LandmarkNet
 
@@ -106,6 +116,7 @@ def _warp(img, cx, cy, r, size, rot_deg=0.0, flip=False, gain=(1.0, 0.0)):
 
 def predict_angle(model, crop):
     import torch
+
     with torch.no_grad():
         _, coords = model(torch.from_numpy(crop)[None, None])
     return G.axis_from_landmarks(coords[0].numpy() * 4.0)["angle"]
@@ -134,11 +145,11 @@ def run(items, det, model, spec, deltas=(-30, -15, 15, 30)) -> list[dict]:
         rec = dict(**it, fired=True, conf=conf, angle=base)
         for d in deltas:
             c, M = _warp(img, cx, cy, r, spec.size, rot_deg=d)
-            rec[f"rot{d:+d}"] = abs(G.signed_angdiff_axial(
-                predict_angle(model, c), expected(base, M0, M)))
+            rec[f"rot{d:+d}"] = abs(
+                G.signed_angdiff_axial(predict_angle(model, c), expected(base, M0, M))
+            )
         c, M = _warp(img, cx, cy, r, spec.size, flip=True)
-        rec["mirror"] = abs(G.signed_angdiff_axial(
-            predict_angle(model, c), expected(base, M0, M)))
+        rec["mirror"] = abs(G.signed_angdiff_axial(predict_angle(model, c), expected(base, M0, M)))
         c, _ = _warp(img, cx, cy, r, spec.size, gain=(1.4, -0.05))
         rec["gain"] = abs(G.signed_angdiff_axial(predict_angle(model, c), base))
         c, _ = _warp(img, cx, cy, r * 1.25, spec.size)
@@ -151,15 +162,23 @@ def run(items, det, model, spec, deltas=(-30, -15, 15, 30)) -> list[dict]:
 # reporting                                                                    #
 # --------------------------------------------------------------------------- #
 
-PROPS = [("rot-30", "rot-30"), ("rot-15", "rot-15"), ("rot+15", "rot+15"),
-         ("rot+30", "rot+30"), ("mirror", "mirror"), ("gain", "gain"),
-         ("scale", "scale")]
+PROPS = [
+    ("rot-30", "rot-30"),
+    ("rot-15", "rot-15"),
+    ("rot+15", "rot+15"),
+    ("rot+30", "rot+30"),
+    ("mirror", "mirror"),
+    ("gain", "gain"),
+    ("scale", "scale"),
+]
 
 
 def _table(rows, title) -> str:
     fired = [r for r in rows if r["fired"]]
-    lines = [f"{title}   n={len(rows)}   detector fired on {len(fired)} "
-             f"({100*len(fired)/max(len(rows),1):.1f}%)"]
+    lines = [
+        f"{title}   n={len(rows)}   detector fired on {len(fired)} "
+        f"({100 * len(fired) / max(len(rows), 1):.1f}%)"
+    ]
     if not fired:
         return "\n".join(lines)
     lines.append(f"  mean detection confidence {np.mean([r['conf'] for r in fired]):.3f}")
@@ -168,23 +187,27 @@ def _table(rows, title) -> str:
         v = np.array([r[key] for r in fired if key in r])
         if len(v) == 0:
             continue
-        lines.append(f"  {label:10s} {np.median(v):7.2f}° {np.percentile(v,90):7.2f}° "
-                     f"{v.max():7.2f}°")
+        lines.append(
+            f"  {label:10s} {np.median(v):7.2f}° {np.percentile(v, 90):7.2f}° {v.max():7.2f}°"
+        )
     return "\n".join(lines)
 
 
 def summarise(rows) -> dict:
     fired = [r for r in rows if r["fired"]]
-    out = dict(n=len(rows), n_fired=len(fired),
-               fire_rate=len(fired) / max(len(rows), 1),
-               mean_conf=float(np.mean([r["conf"] for r in fired])) if fired else 0.0,
-               props={})
+    out = dict(
+        n=len(rows),
+        n_fired=len(fired),
+        fire_rate=len(fired) / max(len(rows), 1),
+        mean_conf=float(np.mean([r["conf"] for r in fired])) if fired else 0.0,
+        props={},
+    )
     for key, _ in PROPS:
         v = np.array([r[key] for r in fired if key in r])
         if len(v):
-            out["props"][key] = dict(median=float(np.median(v)),
-                                     p90=float(np.percentile(v, 90)),
-                                     max=float(v.max()))
+            out["props"][key] = dict(
+                median=float(np.median(v)), p90=float(np.percentile(v, 90)), max=float(v.max())
+            )
     return out
 
 
@@ -210,12 +233,16 @@ def main(a):
 
     if a.json:
         import json
+
         by = defaultdict(list)
         for r in rows:
             by[r["machine"]].append(r)
-        Path(a.json).write_text(json.dumps(
-            dict(overall=summarise(rows),
-                 by_machine={m: summarise(v) for m, v in by.items()}), indent=1))
+        Path(a.json).write_text(
+            json.dumps(
+                dict(overall=summarise(rows), by_machine={m: summarise(v) for m, v in by.items()}),
+                indent=1,
+            )
+        )
         print(f"\nwrote {a.json}")
 
 

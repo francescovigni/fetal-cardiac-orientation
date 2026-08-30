@@ -5,6 +5,7 @@ orientation as *axial* data: an axis is defined modulo 180 deg, not 360.  Direct
 (apex left vs right) is situs and cannot be recovered from the heart alone — see
 README §"Sign and situs".
 """
+
 from __future__ import annotations
 
 import math
@@ -14,6 +15,7 @@ import numpy as np
 # --------------------------------------------------------------------------- #
 # axial angle helpers                                                          #
 # --------------------------------------------------------------------------- #
+
 
 def wrap180(a: np.ndarray | float) -> np.ndarray | float:
     """Map an axial angle into [0, 180)."""
@@ -62,6 +64,7 @@ def decode_axial(sc):
 # orientation from a point set / mask                                          #
 # --------------------------------------------------------------------------- #
 
+
 def pca_axis(points: np.ndarray, weights: np.ndarray | None = None) -> dict:
     """Principal-axis orientation of a weighted 2-D point set.
 
@@ -86,7 +89,7 @@ def pca_axis(points: np.ndarray, weights: np.ndarray | None = None) -> dict:
     if np.linalg.det(R) < 0:
         R[:, -1] *= -1
     gap = max(lam[0] - lam[1], 1e-12)
-    se = math.degrees(math.sqrt(lam[0] * lam[1] / gap ** 2 / max(n, 1)))
+    se = math.degrees(math.sqrt(lam[0] * lam[1] / gap**2 / max(n, 1)))
     Y = X @ R
     lo, hi = Y.min(0), Y.max(0)
     return dict(
@@ -154,15 +157,16 @@ def minarea_axis(points: np.ndarray) -> dict:
         lo, hi = Y.min(0), Y.max(0)
         area = float(np.prod(hi - lo))
         if best is None or area < best["area"]:
-            best = dict(area=area,
-                        angle=float(math.degrees(math.atan2(u[1], u[0])) % 180.0),
-                        size=hi - lo)
+            best = dict(
+                area=area, angle=float(math.degrees(math.atan2(u[1], u[0])) % 180.0), size=hi - lo
+            )
     return best or dict(area=float("nan"), angle=float("nan"))
 
 
 # --------------------------------------------------------------------------- #
 # landmark -> orientation                                                      #
 # --------------------------------------------------------------------------- #
+
 
 def axis_from_landmarks(pts: np.ndarray) -> dict:
     """Heart long axis from the four cardiac ellipse axis endpoints.

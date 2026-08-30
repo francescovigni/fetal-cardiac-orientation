@@ -7,6 +7,7 @@ Output is a dict with the heart box, the four landmarks, the axial angle, and th
 confidence signals.  ``assessable`` is False when the estimate should not be
 reported at all — see README §"Abstention".
 """
+
 from __future__ import annotations
 
 import argparse
@@ -22,13 +23,14 @@ from .landmarks import CropSpec, affine_crop_matrix
 # An orientation is not reported when the shape is too round for an axis to be
 # defined, or when the two internal estimates disagree.  Both thresholds are
 # tuned on the validation split by evaluate.py's risk-coverage table, not guessed.
-ROUNDNESS_LIMIT = 0.93      # predicted b/a above this -> axis ill-defined
-DISAGREEMENT_LIMIT = 12.0   # deg, between the major-axis and minor-axis votes
+ROUNDNESS_LIMIT = 0.93  # predicted b/a above this -> axis ill-defined
+DISAGREEMENT_LIMIT = 12.0  # deg, between the major-axis and minor-axis votes
 HEAD_DISAGREEMENT_LIMIT = 15.0  # deg, between the coordinate head and the axis head
 
 
 def load_landmark_model(ckpt: Path):
     import torch
+
     from .landmarks import K
     from .model import LandmarkNet
 
@@ -39,8 +41,9 @@ def load_landmark_model(ckpt: Path):
     return model, CropSpec(**state["spec"])
 
 
-def detect_heart(yolo_weights: Path, image_path: Path, conf: float = 0.25,
-                 repo: Path = Path("yolov5")):
+def detect_heart(
+    yolo_weights: Path, image_path: Path, conf: float = 0.25, repo: Path = Path("yolov5")
+):
     """Run YOLOv5 and return the highest-confidence 'cardiac' box, or None.
 
     Loaded from the local checkout (``source="local"``) so inference works
@@ -48,8 +51,9 @@ def detect_heart(yolo_weights: Path, image_path: Path, conf: float = 0.25,
     """
     import torch
 
-    model = torch.hub.load(str(repo), "custom", path=str(yolo_weights),
-                           source="local", verbose=False)
+    model = torch.hub.load(
+        str(repo), "custom", path=str(yolo_weights), source="local", verbose=False
+    )
     model.conf = conf
     det = model(str(image_path)).xyxy[0].cpu().numpy()
     cardiac = det[det[:, 5] == 0]
@@ -59,17 +63,16 @@ def detect_heart(yolo_weights: Path, image_path: Path, conf: float = 0.25,
     return float(x0), float(y0), float(x1), float(y1)
 
 
-def orientation_from_box(model, spec: CropSpec, image: np.ndarray,
-                         box: tuple[float, float, float, float]) -> dict:
+def orientation_from_box(
+    model, spec: CropSpec, image: np.ndarray, box: tuple[float, float, float, float]
+) -> dict:
     import torch
-    from .model import axial_angle_from_coords
 
     x0, y0, x1, y1 = box
     cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
     r = max(x1 - x0, y1 - y0) / 2 * (1.0 + spec.margin)
     M = affine_crop_matrix(cx, cy, r, spec.size)
-    crop = cv2.warpAffine(image, M, (spec.size, spec.size),
-                          flags=cv2.INTER_LINEAR, borderValue=0.0)
+    crop = cv2.warpAffine(image, M, (spec.size, spec.size), flags=cv2.INTER_LINEAR, borderValue=0.0)
 
     with torch.no_grad():
         axis, coords = model(torch.from_numpy(crop)[None, None].float())
@@ -82,24 +85,27 @@ def orientation_from_box(model, spec: CropSpec, image: np.ndarray,
     angle_img = G.axis_from_landmarks(pts_img)["angle"]
 
     head_gap = float(G.angdiff_axial(d["angle"], direct))
-    assessable = (d["anisotropy"] < ROUNDNESS_LIMIT
-                  and d["disagreement"] < DISAGREEMENT_LIMIT
-                  and head_gap < HEAD_DISAGREEMENT_LIMIT)
-    return dict(box=[x0, y0, x1, y1],
-                landmarks=pts_img.tolist(),
-                angle_deg=float(angle_img),
-                angle_direct_head_deg=float(direct),
-                roundness=float(d["anisotropy"]),
-                axis_disagreement_deg=float(d["disagreement"]),
-                head_disagreement_deg=head_gap,
-                assessable=bool(assessable))
+    assessable = (
+        d["anisotropy"] < ROUNDNESS_LIMIT
+        and d["disagreement"] < DISAGREEMENT_LIMIT
+        and head_gap < HEAD_DISAGREEMENT_LIMIT
+    )
+    return dict(
+        box=[x0, y0, x1, y1],
+        landmarks=pts_img.tolist(),
+        angle_deg=float(angle_img),
+        angle_direct_head_deg=float(direct),
+        roundness=float(d["anisotropy"]),
+        axis_disagreement_deg=float(d["disagreement"]),
+        head_disagreement_deg=head_gap,
+        assessable=bool(assessable),
+    )
 
 
 def main(a):
     img = np.asarray(cv2.imread(str(a.image), cv2.IMREAD_GRAYSCALE), np.float32) / 255.0
     model, spec = load_landmark_model(Path(a.ckpt))
-    box = (detect_heart(Path(a.yolo), Path(a.image), a.conf, Path(a.repo))
-           if a.yolo else None)
+    box = detect_heart(Path(a.yolo), Path(a.image), a.conf, Path(a.repo)) if a.yolo else None
     if box is None:
         h, w = img.shape
         box = (w * 0.25, h * 0.25, w * 0.75, h * 0.75)

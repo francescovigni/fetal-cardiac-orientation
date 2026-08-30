@@ -1,4 +1,5 @@
 """Unit tests for the angle algebra.  Run with:  .venv/bin/python -m pytest -q"""
+
 import math
 import sys
 from pathlib import Path

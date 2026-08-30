@@ -2,7 +2,8 @@
 
 > An end-to-end computer-vision pipeline that detects the fetal heart in four-chamber ultrasound images and estimates its cardiac orientation from geometric landmarks.
 
-![Python](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)
+[![CI](https://github.com/francescovigni/fetal-cardiac-orientation/actions/workflows/ci.yml/badge.svg)](https://github.com/francescovigni/fetal-cardiac-orientation/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)
 ![PyTorch](https://img.shields.io/badge/PyTorch-2.x-EE4C2C?logo=pytorch&logoColor=white)
 ![YOLOv5](https://img.shields.io/badge/Detector-YOLOv5-00FFFF)
 ![OpenCV](https://img.shields.io/badge/OpenCV-4.x-5C3EE8?logo=opencv&logoColor=white)
@@ -237,7 +238,7 @@ Run against a deliberately **undertrained** checkpoint, the metamorphic suite re
 ## Reproducibility
 
 ```bash
-python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
 
 make data test baselines     # FOCUS download, 9 unit tests, closed-form estimators
 make yolo train              # detector, then the landmark model
@@ -253,7 +254,21 @@ PYTHONPATH=src .venv/bin/python -m fho.predict --image path/to/scan.png
 # {"angle_deg": 63.37, "roundness": 0.69, "head_disagreement_deg": 5.20, "assessable": true}
 ```
 
-Verified from a clean clone in an empty environment: tests pass, data downloads, the annotation cross-check reproduces to the same 0.033°, baselines reproduce exactly, training runs on CPU as well as MPS.
+**Tested in CI on every push** — Python 3.11/3.12/3.13, CPU-only, no dataset download:
+
+| Suite | What it covers |
+|---|---|
+| `test_geometry.py` | axial angle algebra, circular statistics, PCA and min-area estimators |
+| `test_focus.py` | annotation parsing, the semi-major convention, ellipse↔oriented-box agreement |
+| `test_landmarks.py` | the composed affine crop — image and landmarks must transform together under rotation, mirroring and gain |
+| `test_model.py` | forward shapes, swap-invariance of the loss, gradient reachability |
+| `test_estimators.py` | moments survive symmetric mask error; cleanup rescues a detached blob but **not** attached leakage; min-area bimodality |
+| `test_evaluation.py` | Bland–Altman across the 180° wrap, ICC, bootstrap, and that the metamorphic expectation is derived from the warp matrix |
+| `test_pipeline_smoke.py` | YOLO label export, a two-epoch training run, and end-to-end inference |
+
+**60 tests, all on synthetic FOCUS-shaped fixtures**, so CI never downloads the dataset and no test silently skips when the data is absent. Lint and formatting are enforced with `ruff`; documentation links are checked so a renamed figure fails the build. Tagged commits run the full suite before publishing a release.
+
+Verified separately from a clean clone with the real data: the annotation cross-check reproduces to the same 0.033°, baselines reproduce exactly, and training runs on CPU as well as MPS.
 
 ```text
 src/fho/

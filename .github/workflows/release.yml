@@ -1,0 +1,55 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Test, package, publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install (CPU-only torch)
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements-dev.txt
+
+      - name: Gate on the full test suite
+        run: pytest
+
+      - name: Verify documentation links
+        run: python scripts/check_docs.py
+
+      - name: Package figures and documentation
+        run: |
+          mkdir -p dist
+          tar -czf dist/figures-${{ github.ref_name }}.tar.gz docs/figures
+          cp README.md docs/article.md dist/
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+          body: |
+            Reproduce every number in this release:
+
+            ```bash
+            make data test baselines no-training
+            make yolo train eval meta figures
+            make data-external external
+            ```
+
+            Data is public and CC-BY-4.0: FOCUS (10.5281/zenodo.14597550) and
+            FETAL_PLANES_DB (10.5281/zenodo.3904280). Not a medical device.

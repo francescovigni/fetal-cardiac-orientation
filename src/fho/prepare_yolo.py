@@ -6,6 +6,7 @@ the target of stage 2, and stage 1 only has to find the organ.
 
     python -m fho.prepare_yolo --raw data/raw/FOCUS --out data/processed/yolo
 """
+
 from __future__ import annotations
 
 import argparse
@@ -21,8 +22,12 @@ CLASS_ID = {name: i for i, name in enumerate(LABELS)}
 
 
 def obb_to_aabb(corners: np.ndarray) -> tuple[float, float, float, float]:
-    return (float(corners[:, 0].min()), float(corners[:, 1].min()),
-            float(corners[:, 0].max()), float(corners[:, 1].max()))
+    return (
+        float(corners[:, 0].min()),
+        float(corners[:, 1].min()),
+        float(corners[:, 0].max()),
+        float(corners[:, 1].max()),
+    )
 
 
 def main(raw: Path, out: Path) -> None:

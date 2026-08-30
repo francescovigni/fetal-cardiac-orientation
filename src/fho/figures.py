@@ -5,6 +5,7 @@
 Everything is generated from the trained checkpoints, so a figure can never drift
 away from the numbers it illustrates.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -12,6 +13,7 @@ import math
 from pathlib import Path
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
@@ -22,15 +24,23 @@ from .landmarks import CropSpec, make_example
 
 GT, PRED = "#2a9d8f", "#e76f51"
 SERIES = ["#264653", "#e76f51", "#e9c46a", "#8ab17d"]
-plt.rcParams.update({
-    "figure.dpi": 140, "savefig.dpi": 140, "font.size": 8,
-    "axes.spines.top": False, "axes.spines.right": False,
-    "axes.grid": True, "grid.alpha": 0.25, "grid.linewidth": 0.5,
-})
+plt.rcParams.update(
+    {
+        "figure.dpi": 140,
+        "savefig.dpi": 140,
+        "font.size": 8,
+        "axes.spines.top": False,
+        "axes.spines.right": False,
+        "axes.grid": True,
+        "grid.alpha": 0.25,
+        "grid.linewidth": 0.5,
+    }
+)
 
 
 def _load(ckpt: Path):
     import torch
+
     from .landmarks import K
     from .model import LandmarkNet
 
@@ -51,48 +61,76 @@ def _predict_all(model, spec, samples):
             axis, coords = model(torch.from_numpy(ex["image"])[None, None])
         pts = coords[0].numpy() * 4.0
         d = G.axis_from_landmarks(pts)
-        rows.append(dict(
-            image=ex["image"], pts=pts, stem=s.stem,
-            gt=ex["gt_angle"], pred=d["angle"],
-            direct=float(G.decode_axial(axis[0].numpy())),
-            err=float(G.angdiff_axial(d["angle"], ex["gt_angle"])),
-            aniso=ex["anisotropy"], size=s.cardiac.a,
-            gt_pts=ex["landmarks"],
-        ))
+        rows.append(
+            dict(
+                image=ex["image"],
+                pts=pts,
+                stem=s.stem,
+                gt=ex["gt_angle"],
+                pred=d["angle"],
+                direct=float(G.decode_axial(axis[0].numpy())),
+                err=float(G.angdiff_axial(d["angle"], ex["gt_angle"])),
+                aniso=ex["anisotropy"],
+                size=s.cardiac.a,
+                gt_pts=ex["landmarks"],
+            )
+        )
     return rows
 
 
 def _draw_axis(ax, center, angle_deg, length, color, label, ls="-"):
     t = math.radians(angle_deg)
     u = np.array([math.cos(t), math.sin(t)]) * length / 2
-    ax.plot([center[0] - u[0], center[0] + u[0]],
-            [center[1] - u[1], center[1] + u[1]],
-            color=color, lw=1.8, ls=ls, label=label, solid_capstyle="round")
+    ax.plot(
+        [center[0] - u[0], center[0] + u[0]],
+        [center[1] - u[1], center[1] + u[1]],
+        color=color,
+        lw=1.8,
+        ls=ls,
+        label=label,
+        solid_capstyle="round",
+    )
 
 
 def fig_qualitative(rows, out: Path, n=6):
     """Best, median and worst cases — never only the flattering ones."""
     order = np.argsort([r["err"] for r in rows])
-    pick = list(order[:2]) + list(order[len(order) // 2 - 1:len(order) // 2 + 1]) + list(order[-2:])
+    pick = (
+        list(order[:2]) + list(order[len(order) // 2 - 1 : len(order) // 2 + 1]) + list(order[-2:])
+    )
     tags = ["best", "best", "median", "median", "worst", "worst"]
 
     fig, axes = plt.subplots(2, 3, figsize=(7.5, 5.2))
-    for ax, i, tag in zip(axes.ravel(), pick[:n], tags):
+    for ax, i, tag in zip(axes.ravel(), pick[:n], tags, strict=False):
         r = rows[i]
         ax.imshow(r["image"], cmap="gray", vmin=0, vmax=1)
         c = r["pts"][:2].mean(0)
         L = np.linalg.norm(r["pts"][0] - r["pts"][1])
-        _draw_axis(ax, r["gt_pts"][:2].mean(0), r["gt"],
-                   np.linalg.norm(r["gt_pts"][0] - r["gt_pts"][1]), GT, "ground truth")
+        _draw_axis(
+            ax,
+            r["gt_pts"][:2].mean(0),
+            r["gt"],
+            np.linalg.norm(r["gt_pts"][0] - r["gt_pts"][1]),
+            GT,
+            "ground truth",
+        )
         _draw_axis(ax, c, r["pred"], L, PRED, "predicted", ls="--")
         ax.scatter(r["pts"][:2, 0], r["pts"][:2, 1], s=20, c=PRED, zorder=3, lw=0)
-        ax.scatter(r["pts"][2:, 0], r["pts"][2:, 1], s=18, facecolors="none",
-                   edgecolors=PRED, zorder=3, lw=1.0)
+        ax.scatter(
+            r["pts"][2:, 0],
+            r["pts"][2:, 1],
+            s=18,
+            facecolors="none",
+            edgecolors=PRED,
+            zorder=3,
+            lw=1.0,
+        )
         ax.set_title(f"{tag} · {r['stem']} · {r['err']:.1f}°", fontsize=7.5)
         ax.set_xticks([]), ax.set_yticks([]), ax.grid(False)
     axes[0, 0].legend(loc="lower left", fontsize=6, framealpha=0.85)
-    fig.suptitle("Predicted heart long axis vs annotation — best, median and worst test cases",
-                 fontsize=9)
+    fig.suptitle(
+        "Predicted heart long axis vs annotation — best, median and worst test cases", fontsize=9
+    )
     fig.tight_layout()
     fig.savefig(out / "qualitative.png", bbox_inches="tight")
     plt.close(fig)
@@ -109,8 +147,7 @@ def fig_agreement(rows, out: Path):
     fig, (a1, a2) = plt.subplots(1, 2, figsize=(7.5, 3.0))
     a1.axhline(bias, color=PRED, lw=1.2, label=f"bias {bias:+.2f}°")
     for k, ls in ((1.96, "--"),):
-        a1.axhline(bias + k * sd, color=PRED, lw=0.9, ls=ls,
-                   label=f"95% LoA ±{k*sd:.1f}°")
+        a1.axhline(bias + k * sd, color=PRED, lw=0.9, ls=ls, label=f"95% LoA ±{k * sd:.1f}°")
         a1.axhline(bias - k * sd, color=PRED, lw=0.9, ls=ls)
     a1.scatter(gt, d, s=16, c="#264653", alpha=0.75, lw=0)
     a1.set_xlabel("annotated angle (deg)")
@@ -121,8 +158,13 @@ def fig_agreement(rows, out: Path):
     err = np.abs(d)
     a2.hist(err, bins=np.arange(0, err.max() + 2.5, 2.5), color="#264653", alpha=0.85)
     a2.axvline(np.median(err), color=PRED, lw=1.4, label=f"median {np.median(err):.2f}°")
-    a2.axvline(np.percentile(err, 90), color=PRED, lw=1.0, ls="--",
-               label=f"p90 {np.percentile(err, 90):.2f}°")
+    a2.axvline(
+        np.percentile(err, 90),
+        color=PRED,
+        lw=1.0,
+        ls="--",
+        label=f"p90 {np.percentile(err, 90):.2f}°",
+    )
     a2.set_xlabel("absolute error (deg)")
     a2.set_ylabel("test images")
     a2.set_title("Error distribution", fontsize=9)
@@ -143,12 +185,17 @@ def fig_risk_coverage(rows, out: Path):
     }
     cov = np.linspace(1.0, 0.3, 15)
     fig, ax = plt.subplots(figsize=(4.6, 3.1))
-    for (name, s), col in zip(signals.items(), SERIES):
+    for (name, s), col in zip(signals.items(), SERIES, strict=False):
         e = err[np.argsort(-s)]
-        med = [np.median(e[:max(int(round(c * len(e))), 1)]) for c in cov]
-        ax.plot(cov * 100, med, color="#9c6644" if name == "oracle" else col,
-                lw=1.0 if name == "oracle" else 1.6,
-                ls="--" if name == "oracle" else "-", label=name)
+        med = [np.median(e[: max(int(round(c * len(e))), 1)]) for c in cov]
+        ax.plot(
+            cov * 100,
+            med,
+            color="#9c6644" if name == "oracle" else col,
+            lw=1.0 if name == "oracle" else 1.6,
+            ls="--" if name == "oracle" else "-",
+            label=name,
+        )
     ax.set_xlabel("coverage (%)")
     ax.set_ylabel("median absolute error (deg)")
     ax.set_title("Risk–coverage: does abstaining buy accuracy?", fontsize=9)
@@ -174,16 +221,16 @@ def fig_external(out: Path, focus_json: Path, external_json: Path):
     keys = ["rot-30", "rot-15", "rot+15", "rot+30", "mirror", "gain", "scale"]
     labels = ["rot −30°", "rot −15°", "rot +15°", "rot +30°", "mirror", "gain", "crop scale"]
 
-    fig, (a1, a2) = plt.subplots(1, 2, figsize=(8.4, 3.2),
-                                 gridspec_kw={"width_ratios": [1.55, 1]})
+    fig, (a1, a2) = plt.subplots(1, 2, figsize=(8.4, 3.2), gridspec_kw={"width_ratios": [1.55, 1]})
     y = np.arange(len(keys))
     h = 0.36
-    for off, src, col, name in ((+h / 2, foc, GT, "FOCUS (in-distribution)"),
-                                (-h / 2, ext["overall"]["props"], PRED, "FETAL_PLANES (external)")):
+    for off, src, col, name in (
+        (+h / 2, foc, GT, "FOCUS (in-distribution)"),
+        (-h / 2, ext["overall"]["props"], PRED, "FETAL_PLANES (external)"),
+    ):
         med = [src[k]["median"] for k in keys]
         p90 = [src[k]["p90"] for k in keys]
-        a1.barh(y + off, p90, height=h, color=col, alpha=0.30,
-                label=f"{name} — p90")
+        a1.barh(y + off, p90, height=h, color=col, alpha=0.30, label=f"{name} — p90")
         a1.barh(y + off, med, height=h, color=col, label=f"{name} — median")
     a1.set_yticks(y, labels)
     a1.invert_yaxis()
@@ -197,7 +244,7 @@ def fig_external(out: Path, focus_json: Path, external_json: Path):
     conf = [bm[m]["mean_conf"] for m in machines]
     x = np.arange(len(machines))
     a2.bar(x, rate, color="#264653", width=0.6)
-    for i, (r, c, m) in enumerate(zip(rate, conf, machines)):
+    for i, (r, c, _m) in enumerate(zip(rate, conf, machines, strict=False)):
         a2.text(i, r + 1.5, f"{r:.0f}%\nconf {c:.2f}", ha="center", fontsize=6.5)
     a2.set_xticks(x, [f"{m}\n(n={bm[m]['n']})" for m in machines], fontsize=6.5)
     a2.set_ylim(0, 118)
@@ -234,7 +281,7 @@ def fig_obb(rows, out: Path, n=4):
 
     fig, axes = plt.subplots(1, n, figsize=(2.05 * n, 2.5))
     ratios = []
-    for ax, i in zip(np.atleast_1d(axes), pick):
+    for ax, i in zip(np.atleast_1d(axes), pick, strict=False):
         r = rows[i]
         gt_obb = obb_from_axes(r["gt_pts"])
         pr_obb = obb_from_axes(r["pts"])
@@ -251,10 +298,16 @@ def fig_obb(rows, out: Path, n=4):
         _poly(ax, gt_obb, GT, "oriented, annotated")
         _poly(ax, pr_obb, PRED, "oriented, predicted", ls="--")
         ax.scatter(r["pts"][:2, 0], r["pts"][:2, 1], s=18, c=PRED, zorder=3, lw=0)
-        ax.scatter(r["pts"][2:, 0], r["pts"][2:, 1], s=16, facecolors="none",
-                   edgecolors=PRED, zorder=3, lw=1.0)
-        ax.set_title(f"{r['stem']} · {r['gt']:.0f}° · box area ×{ratios[-1]:.2f}",
-                     fontsize=7)
+        ax.scatter(
+            r["pts"][2:, 0],
+            r["pts"][2:, 1],
+            s=16,
+            facecolors="none",
+            edgecolors=PRED,
+            zorder=3,
+            lw=1.0,
+        )
+        ax.set_title(f"{r['stem']} · {r['gt']:.0f}° · box area ×{ratios[-1]:.2f}", fontsize=7)
         ax.set_xticks([]), ax.set_yticks([]), ax.grid(False)
     np.atleast_1d(axes)[0].legend(loc="lower left", fontsize=5.6, framealpha=0.85)
     fig.suptitle("Oriented box vs the axis-aligned box the detector is given", fontsize=9)
@@ -297,13 +350,15 @@ def fig_obb_cost(rows, out: Path, samples):
 
     k = np.mean([s.cardiac.b / s.cardiac.a for s in samples])
     th = np.radians(np.linspace(0, 180, 361))
-    curve = (np.abs(np.cos(th)) + k * np.abs(np.sin(th))) * \
-            (np.abs(np.sin(th)) + k * np.abs(np.cos(th))) / k
+    curve = (
+        (np.abs(np.cos(th)) + k * np.abs(np.sin(th)))
+        * (np.abs(np.sin(th)) + k * np.abs(np.cos(th)))
+        / k
+    )
 
     fig, (a1, a2) = plt.subplots(1, 2, figsize=(8.4, 3.1))
     a1.scatter(ang, ratio, s=10, c="#264653", alpha=0.55, lw=0, label="FOCUS cardiac boxes")
-    a1.plot(np.degrees(th), curve, color=PRED, lw=1.4,
-            label=f"analytic, mean b/a = {k:.2f}")
+    a1.plot(np.degrees(th), curve, color=PRED, lw=1.4, label=f"analytic, mean b/a = {k:.2f}")
     a1.axhline(1.0, color="#9aa0a6", lw=0.8, ls=":")
     a1.set_xlabel("box orientation (deg)")
     a1.set_ylabel("axis-aligned area / oriented area")
@@ -320,10 +375,20 @@ def fig_obb_cost(rows, out: Path, samples):
         iou_obb.append(rotated_iou(pr, gt))
         iou_aabb.append(rotated_iou(aabb, gt))
     bins = np.linspace(0, 1, 21)
-    a2.hist(iou_obb, bins=bins, color=PRED, alpha=0.85,
-            label=f"predicted oriented box (median {np.median(iou_obb):.2f})")
-    a2.hist(iou_aabb, bins=bins, color="#9aa0a6", alpha=0.7,
-            label=f"axis-aligned box (median {np.median(iou_aabb):.2f})")
+    a2.hist(
+        iou_obb,
+        bins=bins,
+        color=PRED,
+        alpha=0.85,
+        label=f"predicted oriented box (median {np.median(iou_obb):.2f})",
+    )
+    a2.hist(
+        iou_aabb,
+        bins=bins,
+        color="#9aa0a6",
+        alpha=0.7,
+        label=f"axis-aligned box (median {np.median(iou_aabb):.2f})",
+    )
     a2.set_xlabel("IoU against the annotated oriented box")
     a2.set_ylabel("test images")
     a2.set_title("What the orientation head recovers", fontsize=9)
@@ -342,7 +407,7 @@ def fig_iou_sensitivity(out: Path):
     """
     err = np.linspace(0, 45, 181)
     fig, ax = plt.subplots(figsize=(4.6, 3.1))
-    for ar, col in zip([1.0, 1.4, 2.0, 4.0, 8.0], SERIES + ["#9c6644"]):
+    for ar, col in zip([1.0, 1.4, 2.0, 4.0, 8.0], SERIES + ["#9c6644"], strict=False):
         w, h = 1.0, 1.0 / ar
         base = np.array([[-w / 2, -h / 2], [w / 2, -h / 2], [w / 2, h / 2], [-w / 2, h / 2]])
         ious = []
@@ -366,9 +431,10 @@ def fig_obb_gallery(rows, out: Path, n=8):
     order = np.argsort([r["gt"] for r in rows])
     pick = order[np.linspace(0, len(order) - 1, n).astype(int)]
     cols = n // 2
-    fig, axes = plt.subplots(2, cols, figsize=(1.75 * cols, 4.3),
-                             gridspec_kw={"hspace": 0.28, "wspace": 0.05})
-    for ax, i in zip(axes.ravel(), pick):
+    fig, axes = plt.subplots(
+        2, cols, figsize=(1.75 * cols, 4.3), gridspec_kw={"hspace": 0.28, "wspace": 0.05}
+    )
+    for ax, i in zip(axes.ravel(), pick, strict=False):
         r = rows[i]
         _poly_img = r["image"]
         ax.imshow(_poly_img, cmap="gray", vmin=0, vmax=1)
@@ -376,8 +442,10 @@ def fig_obb_gallery(rows, out: Path, n=8):
         _poly(ax, obb_from_axes(r["pts"]), PRED, ls="--", lw=1.3)
         ax.set_title(f"{r['gt']:.0f}° · err {r['err']:.1f}°", fontsize=6.5)
         ax.set_xticks([]), ax.set_yticks([]), ax.grid(False)
-    fig.suptitle("Annotated (solid) and predicted (dashed) oriented boxes, "
-                 "across the angle range", fontsize=9)
+    fig.suptitle(
+        "Annotated (solid) and predicted (dashed) oriented boxes, across the angle range",
+        fontsize=9,
+    )
     fig.savefig(out / "obb_gallery.png", bbox_inches="tight")
     plt.close(fig)
 
@@ -401,14 +469,20 @@ def fig_no_training(out: Path, json_path: Path):
     for r in rows:
         by[r["corruption"]].append(r)
     names = list(by)
-    cols = dict(zip(names, SERIES + ["#9c6644", "#6a4c93"]))
+    cols = dict(zip(names, SERIES + ["#9c6644", "#6a4c93"], strict=False))
 
-    fig, (a1, a2) = plt.subplots(1, 2, figsize=(8.6, 3.2),
-                                 gridspec_kw={"width_ratios": [1.15, 1]})
+    fig, (a1, a2) = plt.subplots(1, 2, figsize=(8.6, 3.2), gridspec_kw={"width_ratios": [1.15, 1]})
     for name in names:
         rs = by[name]
-        a1.scatter([r["dice"] for r in rs], [max(r["err_cleaned"], 1e-2) for r in rs],
-                   s=11, alpha=0.55, lw=0, color=cols[name], label=name)
+        a1.scatter(
+            [r["dice"] for r in rs],
+            [max(r["err_cleaned"], 1e-2) for r in rs],
+            s=11,
+            alpha=0.55,
+            lw=0,
+            color=cols[name],
+            label=name,
+        )
     a1.set_yscale("log")
     a1.axhline(5, color="#9aa0a6", lw=0.8, ls=":")
     a1.set_xlabel("Dice of the segmentation against truth")
@@ -426,7 +500,7 @@ def fig_no_training(out: Path, json_path: Path):
         clean.append(np.median([r["err_cleaned"] for r in sel]))
     a2.bar(x - w / 2, raw, w, color="#9aa0a6", label="raw mask")
     a2.bar(x + w / 2, clean, w, color=PRED, label="largest component + opening")
-    for i, (r_, c_) in enumerate(zip(raw, clean)):
+    for i, c_ in enumerate(clean):
         a2.text(i + w / 2, c_ + 1.2, f"{c_:.1f}°", ha="center", fontsize=6.2)
     a2.set_xticks(x, [n.replace(" ", "\n") for n in names], fontsize=6.8)
     a2.set_ylabel("median angle error at the harshest level (deg)")
@@ -465,6 +539,5 @@ if __name__ == "__main__":
     p.add_argument("--out", default="docs/figures")
     p.add_argument("--focus-json", dest="focus_json", default="runs/metamorphic_focus.json")
     p.add_argument("--external-json", dest="external_json", default="runs/external.json")
-    p.add_argument("--no-training-json", dest="no_training_json",
-                   default="runs/no_training.json")
+    p.add_argument("--no-training-json", dest="no_training_json", default="runs/no_training.json")
     main(p.parse_args())

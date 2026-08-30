@@ -20,6 +20,7 @@ good enough, and it is measurable without training anything.
 
     python -m fho.no_training --split test
 """
+
 from __future__ import annotations
 
 import argparse
@@ -38,6 +39,7 @@ RNG = np.random.default_rng(0)
 # --------------------------------------------------------------------------- #
 # corruptions                                                                  #
 # --------------------------------------------------------------------------- #
+
 
 def _disk(r: int) -> np.ndarray:
     return cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1))
@@ -109,6 +111,7 @@ def dice(a, b) -> float:
 # estimators that require no training                                          #
 # --------------------------------------------------------------------------- #
 
+
 def cleanup(mask: np.ndarray, open_radius: int = 3) -> np.ndarray:
     """Two lines that decide whether this approach works at all.
 
@@ -132,8 +135,9 @@ def cleanup(mask: np.ndarray, open_radius: int = 3) -> np.ndarray:
 def estimate(mask: np.ndarray) -> dict:
     ys, xs = np.nonzero(mask)
     if len(xs) < 10:
-        return dict(moments=np.nan, minarea=np.nan, cleaned=np.nan,
-                    se=np.inf, se_cleaned=np.inf, aniso=1.0)
+        return dict(
+            moments=np.nan, minarea=np.nan, cleaned=np.nan, se=np.inf, se_cleaned=np.inf, aniso=1.0
+        )
     pts = np.stack([xs, ys], 1).astype(float)
     mom = G.pca_axis(pts)
     mar = G.minarea_axis(pts)
@@ -145,14 +149,20 @@ def estimate(mask: np.ndarray) -> dict:
     else:
         momc = dict(angle=mom["angle"], angle_se_deg=mom["angle_se_deg"])
 
-    return dict(moments=mom["angle"], minarea=mar["angle"],
-                cleaned=momc["angle"], se=mom["angle_se_deg"],
-                se_cleaned=momc["angle_se_deg"], aniso=mom["anisotropy"])
+    return dict(
+        moments=mom["angle"],
+        minarea=mar["angle"],
+        cleaned=momc["angle"],
+        se=mom["angle_se_deg"],
+        se_cleaned=momc["angle_se_deg"],
+        aniso=mom["anisotropy"],
+    )
 
 
 # --------------------------------------------------------------------------- #
 # experiment                                                                   #
 # --------------------------------------------------------------------------- #
+
 
 def run(raw: Path, split: str) -> list[dict]:
     rows = []
@@ -167,15 +177,20 @@ def run(raw: Path, split: str) -> list[dict]:
                 if m.sum() < 50:
                     continue
                 e = estimate(m)
-                rows.append(dict(
-                    stem=s.stem, corruption=name, level=float(lv),
-                    dice=dice(m, m0),
-                    err_moments=float(G.angdiff_axial(e["moments"], gt)),
-                    err_minarea=float(G.angdiff_axial(e["minarea"], gt)),
-                    err_cleaned=float(G.angdiff_axial(e["cleaned"], gt)),
-                    se=float(e["se"]), se_cleaned=float(e["se_cleaned"]),
-                    aniso=float(e["aniso"]),
-                ))
+                rows.append(
+                    dict(
+                        stem=s.stem,
+                        corruption=name,
+                        level=float(lv),
+                        dice=dice(m, m0),
+                        err_moments=float(G.angdiff_axial(e["moments"], gt)),
+                        err_minarea=float(G.angdiff_axial(e["minarea"], gt)),
+                        err_cleaned=float(G.angdiff_axial(e["cleaned"], gt)),
+                        se=float(e["se"]),
+                        se_cleaned=float(e["se_cleaned"]),
+                        aniso=float(e["aniso"]),
+                    )
+                )
     return rows
 
 
@@ -184,10 +199,11 @@ def report(rows) -> str:
 
     out = ["Orientation from an existing segmentation — no training, no labels", ""]
     out.append("  Angle error against mask quality (Dice vs the true mask):")
-    out.append(f"    {'Dice':>10s} {'n':>5s} {'moments (raw)':>18s} "
-               f"{'moments (cleaned)':>18s} {'min-area rect':>18s}")
-    bins = [(0.98, 1.01), (0.95, 0.98), (0.90, 0.95), (0.80, 0.90),
-            (0.70, 0.80), (0.0, 0.70)]
+    out.append(
+        f"    {'Dice':>10s} {'n':>5s} {'moments (raw)':>18s} "
+        f"{'moments (cleaned)':>18s} {'min-area rect':>18s}"
+    )
+    bins = [(0.98, 1.01), (0.95, 0.98), (0.90, 0.95), (0.80, 0.90), (0.70, 0.80), (0.0, 0.70)]
     d = np.array([r["dice"] for r in rows])
     for lo, hi in bins:
         k = (d >= lo) & (d < hi)
@@ -196,10 +212,12 @@ def report(rows) -> str:
         em = np.array([r["err_moments"] for r in rows])[k]
         ec = np.array([r["err_cleaned"] for r in rows])[k]
         ea = np.array([r["err_minarea"] for r in rows])[k]
-        out.append(f"    {lo:.2f}–{hi:.2f} {k.sum():5d} "
-                   f"{np.median(em):7.2f}° p90 {np.percentile(em, 90):6.2f}° "
-                   f"{np.median(ec):7.2f}° p90 {np.percentile(ec, 90):6.2f}° "
-                   f"{np.median(ea):7.2f}° p90 {np.percentile(ea, 90):6.2f}°")
+        out.append(
+            f"    {lo:.2f}–{hi:.2f} {k.sum():5d} "
+            f"{np.median(em):7.2f}° p90 {np.percentile(em, 90):6.2f}° "
+            f"{np.median(ec):7.2f}° p90 {np.percentile(ec, 90):6.2f}° "
+            f"{np.median(ea):7.2f}° p90 {np.percentile(ea, 90):6.2f}°"
+        )
 
     out += ["", "  By failure mode, at the harshest level applied:"]
     by = collections.defaultdict(list)
@@ -210,22 +228,26 @@ def report(rows) -> str:
         sel = [x for x in rs if x["level"] == worst]
         em = np.array([x["err_moments"] for x in sel])
         ec = np.array([x["err_cleaned"] for x in sel])
-        out.append(f"    {name:16s} level {worst:>5g}  "
-                   f"Dice {np.median([x['dice'] for x in sel]):.2f}  "
-                   f"raw {np.median(em):6.2f}° (p90 {np.percentile(em, 90):5.1f}°)  "
-                   f"cleaned {np.median(ec):6.2f}° (p90 {np.percentile(ec, 90):5.1f}°)")
+        out.append(
+            f"    {name:16s} level {worst:>5g}  "
+            f"Dice {np.median([x['dice'] for x in sel]):.2f}  "
+            f"raw {np.median(em):6.2f}° (p90 {np.percentile(em, 90):5.1f}°)  "
+            f"cleaned {np.median(ec):6.2f}° (p90 {np.percentile(ec, 90):5.1f}°)"
+        )
 
     clean = [r for r in rows if r["level"] == 0 and r["corruption"] == "erode"]
     if clean:
         em = np.array([r["err_moments"] for r in clean])
         ea = np.array([r["err_minarea"] for r in clean])
-        out += ["", f"  On the undamaged mask (n={len(clean)}): "
-                    f"moments median {np.median(em):.2f}°, "
-                    f"min-area median {np.median(ea):.2f}° "
-                    f"({100*np.mean(ea > 10):.0f}% beyond 10°)"]
+        out += [
+            "",
+            f"  On the undamaged mask (n={len(clean)}): "
+            f"moments median {np.median(em):.2f}°, "
+            f"min-area median {np.median(ea):.2f}° "
+            f"({100 * np.mean(ea > 10):.0f}% beyond 10°)",
+        ]
 
-    for label, sek, ek in (("raw", "se", "err_moments"),
-                           ("cleaned", "se_cleaned", "err_cleaned")):
+    for label, sek, ek in (("raw", "se", "err_moments"), ("cleaned", "se_cleaned", "err_cleaned")):
         se = np.array([r[sek] for r in rows])
         err = np.array([r[ek] for r in rows])
         ok = np.isfinite(se) & np.isfinite(err)
@@ -240,6 +262,7 @@ def main(a):
     print(report(rows))
     if a.json:
         import json
+
         Path(a.json).write_text(json.dumps(rows, indent=1))
         print(f"\nwrote {a.json}")
 

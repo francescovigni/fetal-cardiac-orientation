@@ -17,6 +17,7 @@ ellipse ``theta`` as exact orientation ground truth.
 
 All angles here are in **image coordinates**, i.e. x right, y *down*.
 """
+
 from __future__ import annotations
 
 import math
@@ -33,9 +34,9 @@ LABELS = ("cardiac", "thorax")
 class Ellipse:
     cx: float
     cy: float
-    a: float          # semi-major
-    b: float          # semi-minor
-    theta: float      # degrees, direction of the major axis, image coords
+    a: float  # semi-major
+    b: float  # semi-minor
+    theta: float  # degrees, direction of the major axis, image coords
     label: str
 
     @property
@@ -50,11 +51,10 @@ class Ellipse:
     def axis_endpoints(self) -> np.ndarray:
         """The four axis endpoints: [major+, major-, minor+, minor-] as (4, 2)."""
         t = math.radians(self.theta)
-        u = np.array([math.cos(t), math.sin(t)])       # major direction
-        v = np.array([-math.sin(t), math.cos(t)])      # minor direction
+        u = np.array([math.cos(t), math.sin(t)])  # major direction
+        v = np.array([-math.sin(t), math.cos(t)])  # minor direction
         c = self.center
-        return np.stack([c + self.a * u, c - self.a * u,
-                         c + self.b * v, c - self.b * v])
+        return np.stack([c + self.a * u, c - self.a * u, c + self.b * v, c - self.b * v])
 
     def aabb(self) -> tuple[float, float, float, float]:
         """Axis-aligned box (x0, y0, x1, y1) tightly enclosing the ellipse."""
@@ -69,7 +69,7 @@ class Sample:
     stem: str
     image_path: Path
     ellipses: dict[str, Ellipse]
-    obbs: dict[str, np.ndarray]        # label -> (4, 2) corners
+    obbs: dict[str, np.ndarray]  # label -> (4, 2) corners
     mask_paths: dict[str, Path]
 
     @property
@@ -88,7 +88,7 @@ def _read_ellipse_file(p: Path) -> dict[str, Ellipse]:
         if len(f) < 6:
             continue
         cx, cy, a, b, th = (float(x) for x in f[:5])
-        if b > a:                      # normalise: a is always the semi-major
+        if b > a:  # normalise: a is always the semi-major
             a, b, th = b, a, th + 90.0
         out[f[5]] = Ellipse(cx, cy, a, b, th % 180.0, f[5])
     return out
@@ -113,8 +113,11 @@ def load_split(root: str | Path, split: str) -> list[Sample]:
         stem = img.stem
         ell = _read_ellipse_file(d / "annfiles_ellipse" / f"{stem}.txt")
         obb = _read_obb_file(d / "annfiles_rectangle" / f"{stem}.txt")
-        masks = {lab: d / "annfiles_mask" / f"{stem}-{lab}.png" for lab in LABELS
-                 if (d / "annfiles_mask" / f"{stem}-{lab}.png").exists()}
+        masks = {
+            lab: d / "annfiles_mask" / f"{stem}-{lab}.png"
+            for lab in LABELS
+            if (d / "annfiles_mask" / f"{stem}-{lab}.png").exists()
+        }
         if "cardiac" not in ell:
             continue
         samples.append(Sample(stem, img, ell, obb, masks))
@@ -123,9 +126,8 @@ def load_split(root: str | Path, split: str) -> list[Sample]:
 
 def obb_angle(corners: np.ndarray) -> float:
     """Long-edge direction of a 4-corner OBB, degrees mod 180."""
-    e = corners[1:] - corners[0]
-    lens = np.linalg.norm(np.stack([corners[1] - corners[0],
-                                    corners[2] - corners[1]]), axis=1)
+    corners[1:] - corners[0]
+    lens = np.linalg.norm(np.stack([corners[1] - corners[0], corners[2] - corners[1]]), axis=1)
     edge = (corners[1] - corners[0]) if lens[0] >= lens[1] else (corners[2] - corners[1])
     return math.degrees(math.atan2(edge[1], edge[0])) % 180.0
 
@@ -147,6 +149,10 @@ def verify_consistency(samples: list[Sample], label: str = "cardiac") -> dict:
         lens = np.linalg.norm(np.stack([c[1] - c[0], c[2] - c[1]]), axis=1) / 2
         da.append(abs(max(lens) - e.a))
         dth.append(angdiff_axial(obb_angle(c), e.theta))
-    f = lambda v: dict(median=float(np.median(v)), p95=float(np.percentile(v, 95)),
-                       max=float(np.max(v)))
+
+    def f(v):
+        return dict(
+            median=float(np.median(v)), p95=float(np.percentile(v, 95)), max=float(np.max(v))
+        )
+
     return {"n": len(dc), "center_px": f(dc), "semi_major_px": f(da), "angle_deg": f(dth)}

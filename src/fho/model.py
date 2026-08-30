@@ -21,6 +21,7 @@ They are trained together and must agree.  Their disagreement at inference is a
 label-free confidence signal, alongside the major/minor axis disagreement that
 falls out of the four landmarks themselves.
 """
+
 from __future__ import annotations
 
 import torch
@@ -44,11 +45,16 @@ class LandmarkNet(nn.Module):
         w = width
         self.k, self.stride = k, stride
         self.body = nn.Sequential(
-            conv_bn(1, w, 2), conv_bn(w, w),                 # /2
-            conv_bn(w, 2 * w, 2), conv_bn(2 * w, 2 * w),     # /4
-            conv_bn(2 * w, 4 * w, 2), conv_bn(4 * w, 4 * w), # /8
-            conv_bn(4 * w, 8 * w, 2), conv_bn(8 * w, 8 * w), # /16
-            conv_bn(8 * w, 8 * w, 2), conv_bn(8 * w, 8 * w), # /32
+            conv_bn(1, w, 2),
+            conv_bn(w, w),  # /2
+            conv_bn(w, 2 * w, 2),
+            conv_bn(2 * w, 2 * w),  # /4
+            conv_bn(2 * w, 4 * w, 2),
+            conv_bn(4 * w, 4 * w),  # /8
+            conv_bn(4 * w, 8 * w, 2),
+            conv_bn(8 * w, 8 * w),  # /16
+            conv_bn(8 * w, 8 * w, 2),
+            conv_bn(8 * w, 8 * w),  # /32
         )
         # A 4x4 grid, not a 1x1 global average.  Global pooling is very nearly
         # orientation-invariant — it discards exactly the spatial layout that
@@ -57,8 +63,9 @@ class LandmarkNet(nn.Module):
         # grid 3: with a 192 px crop the body outputs 6x6, and MPS only
         # implements adaptive pooling when the sizes divide evenly.
         self.pool = nn.AdaptiveAvgPool2d(3)
-        self.trunk = nn.Sequential(nn.Linear(8 * w * 9, 256), nn.SiLU(inplace=True),
-                                   nn.Dropout(0.1))
+        self.trunk = nn.Sequential(
+            nn.Linear(8 * w * 9, 256), nn.SiLU(inplace=True), nn.Dropout(0.1)
+        )
         self.coord_head = nn.Linear(256, k * 2)
         self.axis_head = nn.Linear(256, 2)
 
@@ -85,8 +92,9 @@ def axial_angle_from_coords(coords: torch.Tensor) -> torch.Tensor:
     d_minor = coords[:, 2] - coords[:, 3]
     t_major = torch.atan2(d_major[:, 1], d_major[:, 0]) * 2
     t_minor = torch.atan2(d_minor[:, 1], d_minor[:, 0]) * 2
-    z = (torch.stack([torch.sin(t_major), torch.cos(t_major)], -1)
-         - torch.stack([torch.sin(t_minor), torch.cos(t_minor)], -1))
+    z = torch.stack([torch.sin(t_major), torch.cos(t_major)], -1) - torch.stack(
+        [torch.sin(t_minor), torch.cos(t_minor)], -1
+    )
     return F.normalize(z, dim=-1, eps=1e-6)
 
 
@@ -109,7 +117,8 @@ class Loss(nn.Module):
 
     def forward(self, axis, coords, coords_t):
         per_swap = torch.stack(
-            [(coords - coords_t[:, perm]).abs().mean((1, 2)) for perm in self.SWAPS], 0)
+            [(coords - coords_t[:, perm]).abs().mean((1, 2)) for perm in self.SWAPS], 0
+        )
         l_xy = per_swap.min(0).values.mean()
 
         z_t = axial_angle_from_coords(coords_t)
@@ -117,5 +126,6 @@ class Loss(nn.Module):
         l_dir = (1.0 - (axis * z_t).sum(-1)).mean()
 
         total = self.w_xy * l_xy + self.w_ang * l_ang + self.w_direct * l_dir
-        return total, dict(xy=float(l_xy.detach()), ang=float(l_ang.detach()),
-                           dir=float(l_dir.detach()))
+        return total, dict(
+            xy=float(l_xy.detach()), ang=float(l_ang.detach()), dir=float(l_dir.detach())
+        )
