@@ -66,14 +66,45 @@ make data-external external   # the external run above (2.1 GB download)
 
 Device is chosen automatically: MPS, CUDA, or CPU.
 
-## Design notes
+## Oriented boxes, and how the angle is recovered
 
-- **Annotations are cross-checked before being trusted.** FOCUS stores each structure as an ellipse *and* an independent oriented box; they agree to 0.07 px and **0.033°** across all 200 training images. That is what licenses using the angle as ground truth.
-- **The 180° endpoint swap.** An ellipse is invariant under 180° rotation, which exchanges both endpoint pairs, so any fixed labelling convention is discontinuous and the network gets contradictory targets. Solved with a swap-invariant loss.
-- **Heatmaps are the wrong estimator here.** Axis endpoints have no distinctive local appearance; they are defined by a global property of the shape. Heatmaps plateaued at ~28°, against 45° for chance.
-- **Global average pooling is nearly orientation-invariant.** It discards the spatial layout that encodes the angle. A 3×3 grid instead of 1×1 was the difference between plateauing and converging.
-- **Angles are axial**, defined modulo 180°, handled in the doubled-angle representation and aggregated with circular statistics. Direction (apex-left vs apex-right) is levocardia versus dextrocardia — a diagnosis needing the spine or stomach bubble, not something to infer from a cropped heart.
-- **Augmentation follows the physics**, not the defaults: rotation ±30° because fetal lie is arbitrary, no vertical flip because no probe swaps near and far field, no hue because the images are grayscale, no mixup because blending two fetal hearts produces anatomy that does not exist.
+FOCUS annotates each structure as an **oriented** box. YOLOv5 consumes axis-aligned ones, so stage one is handed the grey rectangle below and stage two has to put the angle back. That collapse is not free: across all 300 images the axis-aligned box covers **1.92× the area** of the oriented box it came from (p90 2.05×, above 1.5× on 83 % of cases). Most of what the detector returns for a tilted heart is not heart.
+
+![Oriented box versus the axis-aligned box the detector is given](docs/figures/oriented_boxes.png)
+
+### The landmark algorithm
+
+Stage two regresses **four landmarks** — the endpoints of the cardiac ellipse's major and minor axes, ordered `[major+, major-, minor+, minor-]` — and reconstructs the oriented box and the angle from them. Landmarks rather than a scalar angle because the output is inspectable: a clinician can look at four points and say they are wrong, and localised evidence is worth more than a slightly better number in anything that has to be reviewed.
+
+**Crop.** The rotation about the heart centre and the crop are composed into a **single affine matrix**, applied to the image with `warpAffine` and to the landmarks as points. Image and labels transform by the same matrix by construction, so they cannot drift apart through a sign convention. Out-of-image regions fill with zeros, which is what ultrasound background is. Output is 192×192.
+
+**Network.** A small convolutional body (five stride-2 blocks, 32→256 channels), then a **3×3 spatial pool** rather than a global average, then a shared trunk feeding two heads:
+
+- `coords` → 4 × 2 coordinates, `tanh`-bounded and mapped into the crop. This is the reported output.
+- `axis` → the doubled angle `(sin 2θ, cos 2θ)` predicted directly. Never reported; it exists so the two heads can disagree.
+
+**Loss.** Three terms:
+
+1. *Swap-invariant coordinate L1.* An ellipse is invariant under a 180° rotation, which exchanges **both** endpoint pairs at once, so `[major+, major−, minor+, minor−]` and `[major−, major+, minor−, minor+]` are equally correct labellings. Any fixed convention is discontinuous somewhere, and under rotation augmentation the network then receives contradictory targets for visually identical crops. The loss scores both permutations and keeps the smaller per sample.
+2. *Angular loss on the coordinate-derived axis*, as `1 − cos` between predicted and target unit vectors in the doubled-angle space. This ties training to the quantity actually reported, and doubling the angle makes it automatically invariant to the same swap.
+3. *Angular loss on the direct head*, identically defined.
+
+**Inference.** Both axes vote. The major endpoints give the axis directly; the minor endpoints give it rotated by 90°, which in the doubled-angle representation is a negation, so the two are averaged as unit vectors and converted back:
+
+```
+θ = ½·atan2( sin2θ_major − sin2θ_minor ,  cos2θ_major − cos2θ_minor )
+```
+
+Their disagreement, and the gap to the direct head, are label-free confidence signals. The four points also reconstruct the oriented box: centre `(p₀+p₁)/2`, half-axes `u = (p₀−p₁)/2` and `v = (p₂−p₃)/2`, corners `c ± u ± v`.
+
+**Angles are axial throughout** — defined modulo 180°, aggregated with circular statistics. Direction (apex-left vs apex-right) is levocardia versus dextrocardia, a diagnosis needing the spine or stomach bubble, so it is never inferred from a cropped heart.
+
+### Two things that had to fail first
+
+- **Heatmap regression does not work for these landmarks.** An ellipse axis endpoint has no distinctive local appearance; it is a point on a smooth boundary defined by a global property of the shape. Heatmaps plateaued at ~28° median error against 45° for chance. Heatmaps are right for an apex or a valve hinge, wrong here.
+- **Global average pooling is nearly orientation-invariant.** Pooling to 1×1 discards the spatial layout that encodes the angle. Replacing it with the 3×3 grid was the difference between plateauing at 21° and converging to 4.4°.
+
+**Other choices, briefly.** Annotations are cross-checked before being trusted: FOCUS stores each structure as an ellipse *and* an independent oriented box, and they agree to 0.07 px and **0.033°** across all 200 training images. Augmentation follows the physics rather than the defaults — rotation ±30° because fetal lie is arbitrary, no vertical flip because no probe swaps near and far field, no hue because the images are grayscale, no mixup because blending two fetal hearts produces anatomy that does not exist.
 
 ## What this does not show
 

@@ -208,6 +208,61 @@ def fig_external(out: Path, focus_json: Path, external_json: Path):
     plt.close(fig)
 
 
+def obb_from_axes(pts: np.ndarray) -> np.ndarray:
+    """Four ellipse axis endpoints -> the four corners of the oriented box."""
+    c = pts[:2].mean(0)
+    u = (pts[0] - pts[1]) / 2.0
+    v = (pts[2] - pts[3]) / 2.0
+    return np.stack([c + u + v, c + u - v, c - u - v, c - u + v])
+
+
+def _poly(ax, corners, color, label=None, ls="-", lw=1.6):
+    xs = list(corners[:, 0]) + [corners[0, 0]]
+    ys = list(corners[:, 1]) + [corners[0, 1]]
+    ax.plot(xs, ys, color=color, lw=lw, ls=ls, label=label, solid_joinstyle="round")
+
+
+def fig_obb(rows, out: Path, n=4):
+    """Oriented box versus the axis-aligned box the detector actually consumes.
+
+    FOCUS ships oriented boxes; YOLOv5 takes axis-aligned ones, so stage one is
+    handed the grey rectangle and stage two has to put the angle back.  The ratio
+    printed on each panel is how much box area that costs.
+    """
+    order = np.argsort([abs(45 - (r["gt"] % 90)) for r in rows])  # most tilted first
+    pick = order[:n]
+
+    fig, axes = plt.subplots(1, n, figsize=(2.05 * n, 2.5))
+    ratios = []
+    for ax, i in zip(np.atleast_1d(axes), pick):
+        r = rows[i]
+        gt_obb = obb_from_axes(r["gt_pts"])
+        pr_obb = obb_from_axes(r["pts"])
+        x0, y0 = gt_obb.min(0)
+        x1, y1 = gt_obb.max(0)
+        aabb = np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]])
+
+        a_obb = np.linalg.norm(gt_obb[0] - gt_obb[1]) * np.linalg.norm(gt_obb[1] - gt_obb[2])
+        a_aabb = (x1 - x0) * (y1 - y0)
+        ratios.append(a_aabb / a_obb)
+
+        ax.imshow(r["image"], cmap="gray", vmin=0, vmax=1)
+        _poly(ax, aabb, "#9aa0a6", "axis-aligned (YOLO)", ls="--", lw=1.2)
+        _poly(ax, gt_obb, GT, "oriented, annotated")
+        _poly(ax, pr_obb, PRED, "oriented, predicted", ls="--")
+        ax.scatter(r["pts"][:2, 0], r["pts"][:2, 1], s=18, c=PRED, zorder=3, lw=0)
+        ax.scatter(r["pts"][2:, 0], r["pts"][2:, 1], s=16, facecolors="none",
+                   edgecolors=PRED, zorder=3, lw=1.0)
+        ax.set_title(f"{r['stem']} · {r['gt']:.0f}° · box area ×{ratios[-1]:.2f}",
+                     fontsize=7)
+        ax.set_xticks([]), ax.set_yticks([]), ax.grid(False)
+    np.atleast_1d(axes)[0].legend(loc="lower left", fontsize=5.6, framealpha=0.85)
+    fig.suptitle("Oriented box vs the axis-aligned box the detector is given", fontsize=9)
+    fig.tight_layout()
+    fig.savefig(out / "oriented_boxes.png", bbox_inches="tight")
+    plt.close(fig)
+
+
 def main(a):
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -216,6 +271,7 @@ def main(a):
     fig_qualitative(rows, out)
     fig_agreement(rows, out)
     fig_risk_coverage(rows, out)
+    fig_obb(rows, out)
     if Path(a.focus_json).exists() and Path(a.external_json).exists():
         fig_external(out, Path(a.focus_json), Path(a.external_json))
     print(f"wrote {len(list(out.glob('*.png')))} figures to {out}")
