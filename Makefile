@@ -1,7 +1,7 @@
 VENV := .venv/bin
 export PYTHONPATH := src
 
-.PHONY: setup data yolo-data yolo train eval meta test baselines all
+.PHONY: setup data data-external yolo-data yolo train eval meta external figures test baselines all
 
 setup:
 	python3 -m venv .venv && $(VENV)/pip install -q -r requirements.txt
@@ -22,7 +22,16 @@ eval:
 	$(VENV)/python -m fho.evaluate --split test
 
 meta:
-	$(VENV)/python -m fho.metamorphic
+	$(VENV)/python -m fho.metamorphic --json runs/metamorphic_focus.json
+
+data-external:
+	./scripts/download_external.sh
+
+external:
+	$(VENV)/python -m fho.external --n 500 --by-machine --json runs/external.json
+
+figures:
+	$(VENV)/python -m fho.figures
 
 baselines:
 	$(VENV)/python -m fho.baselines --split test

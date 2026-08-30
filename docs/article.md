@@ -114,6 +114,8 @@ Bland-Altman       bias -0.55°   LoA [-18.23, +17.12]
 ICC(2,1)           0.980
 ```
 
+![Bland-Altman and error distribution on the test split](figures/agreement.png)
+
 Four numbers, four different things.
 
 The **bias of −0.55°** says there is no systematic rotation error, which is the failure that would matter most clinically and the one a mean absolute error would hide.
@@ -123,6 +125,8 @@ The **ICC of 0.980** is the flattering number. Cardiac angles span a wide range,
 The **limits of agreement of ±18°** are the honest number, and they are what a clinician would ask for. On an individual scan the estimate can be that far off.
 
 The gap between **4.41° on validation and 7.04° on test** is a real generalisation gap on 200 training images, and the bootstrap interval [4.84, 9.26] says the test estimate itself is loose. Training had not converged at 400 epochs.
+
+![Predicted axis against annotation: best, median and worst test cases](figures/qualitative.png)
 
 Stratifying is more informative than the headline:
 
@@ -139,7 +143,9 @@ Rounder hearts are harder, as the geometry predicts, but the size effect is larg
 
 The model carries two internal consistency checks: the major and minor axes each vote for the angle, and a second head predicts the angle directly. Both disagreements are free confidence signals.
 
-Neither buys much. Dropping to 53 % coverage moves the median from 7.04° to 5.40°, and the p90 barely moves at all. A confidence signal that does not reduce error is not a confidence signal, and reporting it as one would be worse than having none. This model does not yet know when it is wrong.
+![Risk-coverage for each candidate confidence signal](figures/risk_coverage.png)
+
+Neither buys much. Dropping to 53 % coverage moves the median from 7.04° to 5.40°, and the p90 barely moves at all. The best signal available is not either of them: it is simply **heart size**. Predicted elongation is worse than nothing, since abstaining by it makes the median error rise. A confidence signal that does not reduce error is not a confidence signal, and reporting it as one would be worse than having none. This model does not yet know when it is wrong.
 
 ---
 
@@ -187,12 +193,38 @@ One caveat that must not be buried: the FOCUS masks are rasterised from the same
 
 ---
 
+## Testing it somewhere else, with no labels
+
+The obvious objection to everything above is that it is 300 images from one source. The obvious answer is an external test set, and the obvious obstacle is that orientation ground truth does not exist outside FOCUS.
+
+It turns out not to matter. The four properties in the metamorphic suite hold on any image, annotated or not, so the same code runs unchanged on [FETAL_PLANES_DB](https://zenodo.org/records/3904280): a different hospital, different operators, four ultrasound machines, and 1,718 images labelled as the thorax plane.
+
+The detector fires on **93 %** of them at mean confidence 0.75, having never seen the dataset. Then the orientation model:
+
+| Property | FOCUS median | external median | FOCUS p90 | external p90 |
+|---|---|---|---|---|
+| rotation ±15° | 2.9–3.6° | 3.9–4.3° | 7.4–9.0° | 20.5–21.9° |
+| rotation ±30° | 3.7–4.7° | 5.3–6.5° | 10.0–12.5° | 29.2–39.6° |
+| mirror | 2.55° | 6.51° | 12.00° | 44.28° |
+| gain | 0.74° | 1.96° | 3.90° | 8.03° |
+| crop scale | 3.65° | 11.82° | 8.63° | 43.96° |
+
+![Internal versus external self-consistency, and detection by machine](figures/external.png)
+
+The medians move modestly. The tails triple. That gap is the whole result: the model still works on typical external images and fails outright on a substantial minority, and any summary that reported only a mean would have hidden it.
+
+Crop-scale sensitivity going from 3.65° to 11.82° is the most specific finding. It says the model has partly learned the FOCUS crop convention rather than the anatomy, which is a training-time fix, not a data problem.
+
+Splitting by machine, the detector fires on 95 % of Voluson E6 images and **81 % of Aloka** images, at the lowest mean confidence of the four manufacturers. Aloka is 41 % of the external dataset and appears nowhere in FOCUS.
+
+None of this required a single annotation, and the same code can run as a monitor on incoming scans in production, where labels never arrive at all.
+
 ## What this does not show
 
 - **It is not the clinical cardiac axis.** It is the heart's long axis in the image frame. The clinical quantity is measured against the spine-to-sternum midline, and FOCUS annotates neither the spine nor the septum.
 - **±18° limits of agreement are not clinically useful** against a normal band roughly 40° wide.
 - **No human ceiling was established.** Two readers measuring the same clips disagree by some amount, and no model can beat that. Without it, 7° has no reference point.
-- **300 images, one source.** No multi-vendor evaluation, no gestational-age stratification, no held-out site. The generalisation claim that matters here has not been tested.
+- **External evaluation covers self-consistency, not accuracy.** Without orientation labels outside FOCUS, external error against a reference is still unmeasured. No gestational-age stratification, no reader study.
 - **The abstention rule is not calibrated**, for the reason given above.
 - **Nothing here is a medical device**, and none of it has been validated for clinical use.
 

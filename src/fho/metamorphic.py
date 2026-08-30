@@ -64,7 +64,7 @@ def expected_angle(base_angle: float, M_base: np.ndarray, M_aug: np.ndarray) -> 
 
 
 def run(ckpt: Path, raw: Path, split: str = "test",
-        deltas=(-30, -15, 15, 30), n: int | None = None) -> str:
+        deltas=(-30, -15, 15, 30), n: int | None = None, as_dict: bool = False):
     predict, spec = _predictor(ckpt)
     samples = load_split(raw, split)[:n]
 
@@ -94,6 +94,13 @@ def run(ckpt: Path, raw: Path, split: str = "test",
         ex = make_example(s, big)
         scale_res.append(G.signed_angdiff_axial(predict(ex["image"]), base))
 
+    measured = {f"rot{d:+d}": rot_res[d] for d in deltas}
+    measured.update(mirror=flip_res, gain=gain_res, scale=scale_res)
+    if as_dict:
+        return {k: dict(median=float(np.median(np.abs(v))),
+                        p90=float(np.percentile(np.abs(v), 90)),
+                        max=float(np.max(np.abs(v)))) for k, v in measured.items()}
+
     def line(name, v, tol):
         v = np.abs(np.asarray(v, float))
         ok = "PASS" if np.percentile(v, 90) <= tol else "FAIL"
@@ -116,5 +123,11 @@ if __name__ == "__main__":
     p.add_argument("--raw", default="data/raw/FOCUS")
     p.add_argument("--split", default="test")
     p.add_argument("--n", type=int, default=None)
+    p.add_argument("--json", default=None)
     a = p.parse_args()
     print(run(Path(a.ckpt), Path(a.raw), a.split, n=a.n))
+    if a.json:
+        import json
+        Path(a.json).write_text(json.dumps(
+            run(Path(a.ckpt), Path(a.raw), a.split, n=a.n, as_dict=True), indent=1))
+        print(f"wrote {a.json}")

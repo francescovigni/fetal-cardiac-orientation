@@ -2,6 +2,8 @@
 
 Detection and orientation estimation on prenatal four-chamber ultrasound, in two stages: a YOLOv5 detector for the cardiac and thoracic regions, then a landmark-regression model for the heart's long axis. Public data ([FOCUS](https://zenodo.org/records/14597550), CC-BY-4.0), reproducible from a clean clone.
 
+![Predicted heart long axis against the annotation, best / median / worst test cases](docs/figures/qualitative.png)
+
 The reasoning behind the design choices, the three failures that produced them, and how to read the numbers: **[docs/article.md](docs/article.md)**.
 
 ## Quickstart
@@ -14,6 +16,8 @@ make baselines     # closed-form estimators, no training, no GPU
 make yolo          # clone + patch yolov5, prepare labels, train the detector
 make train         # train the orientation model  (~25 min on an M-series GPU)
 make eval meta     # agreement statistics, then the label-free metamorphic suite
+make data-external external   # unlabelled external test on FETAL_PLANES_DB (2.1 GB)
+make figures       # regenerate every figure in docs/figures from the checkpoints
 ```
 
 Device is picked automatically: MPS, CUDA, or CPU.
@@ -41,6 +45,8 @@ Table stakes: one organ, one view, centred, always present.
 | 95 % limits of agreement | −18.23° to +17.12° |
 | ICC(2,1) | 0.980 |
 
+![Bland-Altman and error distribution](docs/figures/agreement.png)
+
 Unbiased, but the limits of agreement are the number that counts: a single scan can be misplaced by ±18° against a clinical normal band roughly 40° wide. Validation median was 4.41°, so there is a real generalisation gap on 200 training images, and training had not converged.
 
 **Classical baselines** on the ground-truth masks:
@@ -63,6 +69,36 @@ Minimum-area fails because for an ellipse the enclosing rectangle reaches the sa
 | crop-scale invariance | 3.65° | 8.63° |
 
 All fail the tolerances set in the file; the tolerances were not relaxed. Gain invariance is the actionable one: a pure brightness change moves an anatomical measurement by up to 5°.
+
+**Abstention.** None of the model's internal confidence signals buys much accuracy. The best of the candidates is simply *heart size*, not head agreement and not predicted elongation — and predicted elongation is worse than useless, since abstaining by it makes the median error rise.
+
+![Risk-coverage curves for each candidate confidence signal](docs/figures/risk_coverage.png)
+
+## External evaluation, without labels
+
+FOCUS has orientation ground truth; almost no other public fetal dataset does. That does not block an external test, because the properties the estimator must satisfy need no labels at all. The same metamorphic suite runs on [FETAL_PLANES_DB](https://zenodo.org/records/3904280) (Zenodo 3904280, CC-BY-4.0), a different hospital, different operators and four ultrasound machines, using its 1,718 `Fetal thorax` images.
+
+```bash
+make external      # 500 images, stratified by ultrasound machine
+```
+
+Detection fires on **93 %** of external thorax images at mean confidence 0.75, without ever having seen this dataset.
+
+![Internal versus external self-consistency, and detection by machine](docs/figures/external.png)
+
+| Property | FOCUS median | external median | FOCUS p90 | external p90 |
+|---|---|---|---|---|
+| rotation ±15° | 2.9–3.6° | 3.9–4.3° | 7.4–9.0° | 20.5–21.9° |
+| rotation ±30° | 3.7–4.7° | 5.3–6.5° | 10.0–12.5° | 29.2–39.6° |
+| mirror | 2.55° | 6.51° | 12.00° | 44.28° |
+| gain | 0.74° | 1.96° | 3.90° | 8.03° |
+| crop scale | 3.65° | 11.82° | 8.63° | 43.96° |
+
+**The medians move a little and the tails triple.** That is the shape of a model that still works on typical external images and fails outright on a substantial minority — a distinction an average would erase. Crop-scale sensitivity is the worst of it, 3.65° to 11.82°, which says the model has partly learned the FOCUS crop convention rather than the anatomy.
+
+By machine, the detector fires on 95 % of Voluson E6 images but only **81 % of Aloka** images, at the lowest mean confidence of the four. Aloka is 41 % of the source dataset and is absent from FOCUS.
+
+None of this needed a single annotation.
 
 ## Data
 
@@ -99,7 +135,8 @@ Angles are treated as **axial** throughout — defined modulo 180°, handled in 
 - Not the clinical cardiac axis, which is measured against the spine-to-sternum midline. FOCUS annotates neither spine nor septum. `geometry.cardiac_axis()` is one spine landmark away from it.
 - ±18° limits of agreement are not clinically useful.
 - No human reader ceiling established, so 7° has no reference point.
-- 300 images from one source: no multi-vendor, multi-site, or gestational-age stratified evaluation.
+- External evaluation covers **self-consistency only**, not accuracy. There is no orientation ground truth outside FOCUS, so external error against a reference remains unmeasured.
+- No gestational-age stratification, and no reader study.
 - The abstention rule is not calibrated.
 - Not a medical device, not validated for clinical use.
 
