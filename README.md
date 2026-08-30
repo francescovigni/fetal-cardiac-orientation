@@ -1,165 +1,92 @@
 # fetal-cardiac-orientation
 
-Detection and orientation estimation on prenatal four-chamber ultrasound, in two stages: a YOLOv5 detector for the cardiac and thoracic regions, then a landmark-regression model for the heart's long axis. Public data ([FOCUS](https://zenodo.org/records/14597550), CC-BY-4.0), reproducible from a clean clone.
+Finding the fetal heart in a four-chamber ultrasound and estimating its long axis, on public data ([FOCUS](https://zenodo.org/records/14597550), CC-BY-4.0), reproducible from a clean clone.
 
-![Predicted heart long axis against the annotation, best / median / worst test cases](docs/figures/qualitative.png)
+The model is ordinary. The interesting part is what it takes to know whether it works — including on a second hospital's data where no orientation labels exist at all.
 
-The reasoning behind the design choices, the three failures that produced them, and how to read the numbers: **[docs/article.md](docs/article.md)**.
+![Predicted heart long axis against the annotation: best, median and worst test cases](docs/figures/qualitative.png)
 
-## Quickstart
+Full write-up: **[docs/article.md](docs/article.md)**
 
-```bash
-python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
-make data          # download FOCUS (58 MB) into data/raw
-make test          # 9 unit tests on the angle algebra
-make baselines     # closed-form estimators, no training, no GPU
-make yolo          # clone + patch yolov5, prepare labels, train the detector
-make train         # train the orientation model  (~25 min on an M-series GPU)
-make eval meta     # agreement statistics, then the label-free metamorphic suite
-make data-external external   # unlabelled external test on FETAL_PLANES_DB (2.1 GB)
-make figures       # regenerate every figure in docs/figures from the checkpoints
-```
+## The result worth reading
 
-Device is picked automatically: MPS, CUDA, or CPU.
+The metamorphic properties an orientation estimator must satisfy — rotate the input, the axis rotates with it; change the brightness, it does not move — hold on **any** image, annotated or not. So the same suite runs unchanged on [FETAL_PLANES_DB](https://zenodo.org/records/3904280): a different hospital, four ultrasound machines, 1,718 thorax images, zero labels.
 
-## Results
+| Property | median: FOCUS → external | p90: FOCUS → external |
+|---|---|---|
+| rotation ±15° | 2.9–3.6° → 3.9–4.3° | 7.4–9.0° → **20.5–21.9°** |
+| rotation ±30° | 3.7–4.7° → 5.3–6.5° | 10.0–12.5° → **29.2–39.6°** |
+| mirror | 2.6° → 6.5° | 12.0° → **44.3°** |
+| gain | 0.7° → 2.0° | 3.9° → 8.0° |
+| crop scale | 3.7° → **11.8°** | 8.6° → **44.0°** |
 
-Held-out test split, 50 images. Trained on 200.
+![Internal versus external self-consistency, and detection by machine](docs/figures/external.png)
 
-**Detection** — YOLOv5s, 150 epochs, 640 px, 14 ms/image.
+**The medians move a little. The tails triple.** The model still works on typical external images and fails outright on a minority — a distinction any average would erase. Crop-scale sensitivity going from 3.7° to 11.8° says it partly learned the FOCUS crop convention rather than the anatomy, which is a training fix, not a data problem.
 
-| Class | P | R | mAP@50 | mAP@50-95 |
+Detection transfers better: it fires on 93 % of external images at mean confidence 0.75, but on **81 % of Aloka** images against 95 % for Voluson E6. Aloka is 41 % of that dataset and appears nowhere in FOCUS.
+
+## In-distribution numbers
+
+Held-out test split, 50 images, trained on 200.
+
+| Detection (YOLOv5s) | P | R | mAP@50 | mAP@50-95 |
 |---|---|---|---|---|
 | cardiac | 0.990 | 1.000 | 0.995 | 0.637 |
 | thorax | 0.999 | 1.000 | 0.995 | 0.660 |
 
 Table stakes: one organ, one view, centred, always present.
 
-**Orientation** — landmark regression, 400 epochs.
-
-| | |
+| Orientation | |
 |---|---|
 | median absolute error | 7.04° (95 % CI 4.84–9.26) |
-| p90 | 12.92° |
 | Bland-Altman bias | −0.55° |
-| 95 % limits of agreement | −18.23° to +17.12° |
+| 95 % limits of agreement | −18.2° to +17.1° |
 | ICC(2,1) | 0.980 |
+
+Unbiased, and the limits of agreement are the number that counts: a single scan can be misplaced by ±18° against a clinical normal band roughly 40° wide. Validation median was 4.41°, so there is a real generalisation gap on 200 images, and training had not converged.
 
 ![Bland-Altman and error distribution](docs/figures/agreement.png)
 
-Unbiased, but the limits of agreement are the number that counts: a single scan can be misplaced by ±18° against a clinical normal band roughly 40° wide. Validation median was 4.41°, so there is a real generalisation gap on 200 training images, and training had not converged.
+**Abstention does not work yet, and that is reported rather than hidden.** No internal confidence signal buys much accuracy. The best candidate is simply *heart size*; predicted elongation is worse than nothing, since abstaining by it raises the median error.
 
-**Classical baselines** on the ground-truth masks:
+![Risk-coverage for each candidate confidence signal](docs/figures/risk_coverage.png)
 
-| Estimator | median | p90 | >10° |
-|---|---|---|---|
-| PCA / image moments | 0.28° | 0.45° | 0 % |
-| minimum-area rectangle | 4.95° | 88.42° | 44 % |
+**Classical baselines** on the ground-truth masks: PCA moments 0.28° median, minimum-area rectangle 4.95° median with 44 % of cases beyond 10°. Minimum-area fails because an ellipse's enclosing rectangle hits the same minimum area at both the major and the minor alignment, so the estimator is bimodal. Exact for area, unstable for axis. (The masks are rasterised from the same ellipses, so 0.28° measures geometry-code consistency, not accuracy.)
 
-Minimum-area fails because for an ellipse the enclosing rectangle reaches the same minimum area at both the major and the minor alignment, so the estimator is bimodal and picks one of two optima 90° apart. It is exact for area and unstable for axis. Note the masks are rasterised from the same ellipse annotations, so 0.28° measures geometry-code consistency, not accuracy.
-
-**Metamorphic tests**, no labels used:
-
-| Property | median | p90 |
-|---|---|---|
-| rotation equivariance ±15° | 2.9–3.6° | 7.4–9.0° |
-| rotation equivariance ±30° | 3.7–4.7° | 10.0–12.5° |
-| mirror equivariance | 2.55° | 12.00° |
-| gain invariance | 0.74° | 3.90° |
-| crop-scale invariance | 3.65° | 8.63° |
-
-All fail the tolerances set in the file; the tolerances were not relaxed. Gain invariance is the actionable one: a pure brightness change moves an anatomical measurement by up to 5°.
-
-**Abstention.** None of the model's internal confidence signals buys much accuracy. The best of the candidates is simply *heart size*, not head agreement and not predicted elongation — and predicted elongation is worse than useless, since abstaining by it makes the median error rise.
-
-![Risk-coverage curves for each candidate confidence signal](docs/figures/risk_coverage.png)
-
-## External evaluation, without labels
-
-FOCUS has orientation ground truth; almost no other public fetal dataset does. That does not block an external test, because the properties the estimator must satisfy need no labels at all. The same metamorphic suite runs on [FETAL_PLANES_DB](https://zenodo.org/records/3904280) (Zenodo 3904280, CC-BY-4.0), a different hospital, different operators and four ultrasound machines, using its 1,718 `Fetal thorax` images.
+## Run it
 
 ```bash
-make external      # 500 images, stratified by ultrasound machine
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+make data test baselines      # download, 9 unit tests, closed-form estimators
+make yolo train               # detector, then the orientation model (~25 min, M-series GPU)
+make eval meta figures        # agreement statistics, metamorphic suite, figures
+make data-external external   # the external run above (2.1 GB download)
 ```
 
-Detection fires on **93 %** of external thorax images at mean confidence 0.75, without ever having seen this dataset.
-
-![Internal versus external self-consistency, and detection by machine](docs/figures/external.png)
-
-| Property | FOCUS median | external median | FOCUS p90 | external p90 |
-|---|---|---|---|---|
-| rotation ±15° | 2.9–3.6° | 3.9–4.3° | 7.4–9.0° | 20.5–21.9° |
-| rotation ±30° | 3.7–4.7° | 5.3–6.5° | 10.0–12.5° | 29.2–39.6° |
-| mirror | 2.55° | 6.51° | 12.00° | 44.28° |
-| gain | 0.74° | 1.96° | 3.90° | 8.03° |
-| crop scale | 3.65° | 11.82° | 8.63° | 43.96° |
-
-**The medians move a little and the tails triple.** That is the shape of a model that still works on typical external images and fails outright on a substantial minority — a distinction an average would erase. Crop-scale sensitivity is the worst of it, 3.65° to 11.82°, which says the model has partly learned the FOCUS crop convention rather than the anatomy.
-
-By machine, the detector fires on 95 % of Voluson E6 images but only **81 % of Aloka** images, at the lowest mean confidence of the four. Aloka is 41 % of the source dataset and is absent from FOCUS.
-
-None of this needed a single annotation.
-
-## Data
-
-FOCUS, 300 prenatal four-chamber images (200/50/50), grayscale, ~961×663. Each image carries three parallel annotations for `cardiac` and `thorax`:
-
-```
-annfiles_ellipse/NNN.txt      cx cy a b theta_deg label       (a = semi-major)
-annfiles_rectangle/NNN.txt    x1 y1 … x4 y4 label difficulty  (DOTA-style oriented box)
-annfiles_mask/NNN-{cardiac,thorax}.png
-```
-
-`focus.verify_consistency` cross-checks the ellipse parameters against the independent oriented boxes across all 200 training images before either is trusted: centre agrees to 0.07 px, semi-major to 0.09 px, angle to **0.033°**. That is what licenses using the ellipse angle as ground truth.
-
-Rejected alternatives: FETAL_PLANES_DB (12,400 images, class labels only, no geometry); CAMUS and EchoNet-Dynamic (adult echocardiography).
+Device is chosen automatically: MPS, CUDA, or CPU.
 
 ## Design notes
 
-Oriented boxes are collapsed to axis-aligned for YOLOv5, which only has to find the organ. Orientation is the target of stage two.
-
-Augmentation departs from the YOLOv5 defaults on physical grounds (`configs/hyp.focus.yaml`): hue and saturation off (grayscale), brightness kept (gain varies between machines), rotation ±30° (fetal lie is arbitrary), vertical flip off (would swap near and far field), horizontal flip on (a valid lie), mixup and copy-paste off (blending two fetal hearts produces anatomy that does not exist).
-
-Stage two regresses four landmarks — the endpoints of the cardiac ellipse's axes — rather than the angle directly, so the output is inspectable: a clinician can look at four points and say they are wrong. Three things had to be fixed, each documented at the point in the source where it applies:
-
-- **The 180° endpoint swap.** An ellipse is invariant under 180° rotation, which exchanges both endpoint pairs, so any fixed labelling convention is discontinuous. Solved with a swap-invariant loss (`model.Loss`).
-- **Heatmaps are the wrong estimator here.** Axis endpoints have no distinctive local appearance; they are defined by a global property of the shape. Heatmaps plateaued at ~28° against 45° for chance.
+- **Annotations are cross-checked before being trusted.** FOCUS stores each structure as an ellipse *and* an independent oriented box; they agree to 0.07 px and **0.033°** across all 200 training images. That is what licenses using the angle as ground truth.
+- **The 180° endpoint swap.** An ellipse is invariant under 180° rotation, which exchanges both endpoint pairs, so any fixed labelling convention is discontinuous and the network gets contradictory targets. Solved with a swap-invariant loss.
+- **Heatmaps are the wrong estimator here.** Axis endpoints have no distinctive local appearance; they are defined by a global property of the shape. Heatmaps plateaued at ~28°, against 45° for chance.
 - **Global average pooling is nearly orientation-invariant.** It discards the spatial layout that encodes the angle. A 3×3 grid instead of 1×1 was the difference between plateauing and converging.
-
-Angles are treated as **axial** throughout — defined modulo 180°, handled in the doubled-angle representation, aggregated with circular statistics. Direction (apex-left vs apex-right) is levocardia versus dextrocardia, a diagnosis that needs the spine or stomach bubble, so it is not inferred from a cropped heart.
-
-`predict.py` returns `assessable: false` when the predicted shape is too round for an axis to exist (`b/a > 0.93`), when the major and minor axis votes disagree by more than 12°, or when the two heads disagree by more than 15°. Thresholds come from the risk-coverage table on validation. Caveat: that table is nearly flat, so these signals are only weakly informative — reported in the article rather than presented as a working confidence estimate.
+- **Angles are axial**, defined modulo 180°, handled in the doubled-angle representation and aggregated with circular statistics. Direction (apex-left vs apex-right) is levocardia versus dextrocardia — a diagnosis needing the spine or stomach bubble, not something to infer from a cropped heart.
+- **Augmentation follows the physics**, not the defaults: rotation ±30° because fetal lie is arbitrary, no vertical flip because no probe swaps near and far field, no hue because the images are grayscale, no mixup because blending two fetal hearts produces anatomy that does not exist.
 
 ## What this does not show
 
-- Not the clinical cardiac axis, which is measured against the spine-to-sternum midline. FOCUS annotates neither spine nor septum. `geometry.cardiac_axis()` is one spine landmark away from it.
-- ±18° limits of agreement are not clinically useful.
-- No human reader ceiling established, so 7° has no reference point.
-- External evaluation covers **self-consistency only**, not accuracy. There is no orientation ground truth outside FOCUS, so external error against a reference remains unmeasured.
-- No gestational-age stratification, and no reader study.
-- The abstention rule is not calibrated.
-- Not a medical device, not validated for clinical use.
+- **Not the clinical cardiac axis**, which is measured against the spine-to-sternum midline. FOCUS annotates neither spine nor septum. `geometry.cardiac_axis()` is one spine landmark away.
+- **±18° limits of agreement are not clinically useful.**
+- **External evaluation covers self-consistency, not accuracy** — there are no orientation labels outside FOCUS.
+- **No reader ceiling**, so 7° has no reference point. No gestational-age stratification.
+- **Not a medical device.** Not validated for clinical use.
 
 ## Layout
 
-```
-configs/          YOLOv5 data and hyperparameter configs
-scripts/          data download, yolov5 setup, detector training
-src/fho/
-  focus.py        dataset parsing, annotation cross-validation
-  geometry.py     axial angle algebra, circular statistics, PCA and min-area baselines
-  landmarks.py    crops, augmentation, single-affine warp, canonical landmarks
-  model.py        landmark regression network, swap-invariant loss
-  train_landmarks.py
-  baselines.py    closed-form estimators on the ground-truth masks
-  evaluate.py     Bland-Altman, ICC, stratification, risk-coverage, bootstrap CIs
-  metamorphic.py  label-free equivariance and invariance tests
-  predict.py      end-to-end detection to angle
-  prepare_yolo.py
-docs/article.md   the write-up
-tests/            unit tests for the angle algebra
-```
+`src/fho/` — `focus.py` parsing and annotation cross-validation · `geometry.py` axial angle algebra, circular statistics, PCA and min-area baselines · `landmarks.py` crops and augmentation · `model.py` network and swap-invariant loss · `evaluate.py` Bland-Altman, ICC, stratification, risk-coverage · `metamorphic.py` label-free tests · `external.py` the cross-dataset run · `figures.py` · `predict.py` end to end.
 
 ## Licence
 
-Code MIT. FOCUS is CC-BY-4.0 and must be cited: *FOCUS: Four-chamber Ultrasound Image Dataset for Fetal Cardiac Biometric Measurement*, Zenodo, `10.5281/zenodo.14597550`.
+Code MIT. FOCUS and FETAL_PLANES_DB are CC-BY-4.0 and must be cited: *FOCUS: Four-chamber Ultrasound Image Dataset for Fetal Cardiac Biometric Measurement*, Zenodo `10.5281/zenodo.14597550`; Burgos-Artizzu et al., *FETAL_PLANES_DB*, Zenodo `10.5281/zenodo.3904280`.
