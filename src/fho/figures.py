@@ -263,15 +263,138 @@ def fig_obb(rows, out: Path, n=4):
     plt.close(fig)
 
 
+def rotated_iou(a: np.ndarray, b: np.ndarray) -> float:
+    """IoU between two convex quadrilaterals, via polygon intersection."""
+    import cv2
+
+    a32, b32 = a.astype(np.float32), b.astype(np.float32)
+    inter, poly = cv2.intersectConvexConvex(a32, b32)
+    if inter <= 0:
+        return 0.0
+    aa = cv2.contourArea(a32)
+    ab = cv2.contourArea(b32)
+    return float(inter / (aa + ab - inter))
+
+
+def fig_obb_cost(rows, out: Path, samples):
+    """What the axis-aligned collapse costs, and what the oriented box recovers.
+
+    Left: the area a detector is handed relative to the true oriented box, against
+    the box's own orientation.  The cost is zero at 0 and 90 degrees and peaks at
+    45, and the analytic curve for the mean aspect ratio is drawn through it.
+
+    Right: rotated IoU of the predicted oriented box against the annotation,
+    compared with the IoU the axis-aligned box would have scored.
+    """
+    ang, ratio = [], []
+    for s in samples:
+        e = s.cardiac
+        c = s.obbs["cardiac"]
+        w, h = c.max(0) - c.min(0)
+        ang.append(e.theta)
+        ratio.append((w * h) / (4 * e.a * e.b))
+    ang, ratio = np.array(ang), np.array(ratio)
+
+    k = np.mean([s.cardiac.b / s.cardiac.a for s in samples])
+    th = np.radians(np.linspace(0, 180, 361))
+    curve = (np.abs(np.cos(th)) + k * np.abs(np.sin(th))) * \
+            (np.abs(np.sin(th)) + k * np.abs(np.cos(th))) / k
+
+    fig, (a1, a2) = plt.subplots(1, 2, figsize=(8.4, 3.1))
+    a1.scatter(ang, ratio, s=10, c="#264653", alpha=0.55, lw=0, label="FOCUS cardiac boxes")
+    a1.plot(np.degrees(th), curve, color=PRED, lw=1.4,
+            label=f"analytic, mean b/a = {k:.2f}")
+    a1.axhline(1.0, color="#9aa0a6", lw=0.8, ls=":")
+    a1.set_xlabel("box orientation (deg)")
+    a1.set_ylabel("axis-aligned area / oriented area")
+    a1.set_title(f"Cost of dropping the angle (median ×{np.median(ratio):.2f})", fontsize=9)
+    a1.legend(fontsize=6.5, loc="lower center")
+
+    iou_obb, iou_aabb = [], []
+    for r in rows:
+        gt = obb_from_axes(r["gt_pts"])
+        pr = obb_from_axes(r["pts"])
+        x0, y0 = gt.min(0)
+        x1, y1 = gt.max(0)
+        aabb = np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]])
+        iou_obb.append(rotated_iou(pr, gt))
+        iou_aabb.append(rotated_iou(aabb, gt))
+    bins = np.linspace(0, 1, 21)
+    a2.hist(iou_obb, bins=bins, color=PRED, alpha=0.85,
+            label=f"predicted oriented box (median {np.median(iou_obb):.2f})")
+    a2.hist(iou_aabb, bins=bins, color="#9aa0a6", alpha=0.7,
+            label=f"axis-aligned box (median {np.median(iou_aabb):.2f})")
+    a2.set_xlabel("IoU against the annotated oriented box")
+    a2.set_ylabel("test images")
+    a2.set_title("What the orientation head recovers", fontsize=9)
+    a2.legend(fontsize=6.5, loc="upper left")
+    fig.tight_layout()
+    fig.savefig(out / "obb_cost.png", bbox_inches="tight")
+    plt.close(fig)
+
+
+def fig_iou_sensitivity(out: Path):
+    """How fast rotated IoU falls with an angle error, by aspect ratio.
+
+    This is why an oriented-box metric is really an angle metric: at 4:1 a five
+    degree error already costs a tenth of the IoU, and the usual 0.5 threshold is
+    reached long before the box looks wrong to a person.
+    """
+    err = np.linspace(0, 45, 181)
+    fig, ax = plt.subplots(figsize=(4.6, 3.1))
+    for ar, col in zip([1.0, 1.4, 2.0, 4.0, 8.0], SERIES + ["#9c6644"]):
+        w, h = 1.0, 1.0 / ar
+        base = np.array([[-w / 2, -h / 2], [w / 2, -h / 2], [w / 2, h / 2], [-w / 2, h / 2]])
+        ious = []
+        for e in err:
+            t = np.radians(e)
+            R = np.array([[np.cos(t), -np.sin(t)], [np.sin(t), np.cos(t)]])
+            ious.append(rotated_iou(base * 1000, (base @ R.T) * 1000))
+        ax.plot(err, ious, color=col, lw=1.5, label=f"aspect {ar:g}:1")
+    ax.axhline(0.5, color="#9aa0a6", lw=0.8, ls=":")
+    ax.set_xlabel("angle error (deg)")
+    ax.set_ylabel("rotated IoU")
+    ax.set_title("An oriented-box metric is an angle metric", fontsize=9)
+    ax.legend(fontsize=6.5)
+    fig.tight_layout()
+    fig.savefig(out / "obb_iou_sensitivity.png", bbox_inches="tight")
+    plt.close(fig)
+
+
+def fig_obb_gallery(rows, out: Path, n=8):
+    """Predicted against annotated oriented boxes across the full angle range."""
+    order = np.argsort([r["gt"] for r in rows])
+    pick = order[np.linspace(0, len(order) - 1, n).astype(int)]
+    cols = n // 2
+    fig, axes = plt.subplots(2, cols, figsize=(1.75 * cols, 4.3),
+                             gridspec_kw={"hspace": 0.28, "wspace": 0.05})
+    for ax, i in zip(axes.ravel(), pick):
+        r = rows[i]
+        _poly_img = r["image"]
+        ax.imshow(_poly_img, cmap="gray", vmin=0, vmax=1)
+        _poly(ax, obb_from_axes(r["gt_pts"]), GT, lw=1.3)
+        _poly(ax, obb_from_axes(r["pts"]), PRED, ls="--", lw=1.3)
+        ax.set_title(f"{r['gt']:.0f}° · err {r['err']:.1f}°", fontsize=6.5)
+        ax.set_xticks([]), ax.set_yticks([]), ax.grid(False)
+    fig.suptitle("Annotated (solid) and predicted (dashed) oriented boxes, "
+                 "across the angle range", fontsize=9)
+    fig.savefig(out / "obb_gallery.png", bbox_inches="tight")
+    plt.close(fig)
+
+
 def main(a):
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     model, spec = _load(Path(a.ckpt))
-    rows = _predict_all(model, spec, load_split(a.raw, a.split))
+    samples = load_split(a.raw, a.split)
+    rows = _predict_all(model, spec, samples)
     fig_qualitative(rows, out)
     fig_agreement(rows, out)
     fig_risk_coverage(rows, out)
     fig_obb(rows, out)
+    fig_obb_cost(rows, out, samples)
+    fig_obb_gallery(rows, out)
+    fig_iou_sensitivity(out)
     if Path(a.focus_json).exists() and Path(a.external_json).exists():
         fig_external(out, Path(a.focus_json), Path(a.external_json))
     print(f"wrote {len(list(out.glob('*.png')))} figures to {out}")

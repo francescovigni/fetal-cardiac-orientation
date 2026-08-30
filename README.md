@@ -66,13 +66,41 @@ make data-external external   # the external run above (2.1 GB download)
 
 Device is chosen automatically: MPS, CUDA, or CPU.
 
-## Oriented boxes, and how the angle is recovered
+## Oriented bounding boxes
 
-FOCUS annotates each structure as an **oriented** box. YOLOv5 consumes axis-aligned ones, so stage one is handed the grey rectangle below and stage two has to put the angle back. That collapse is not free: across all 300 images the axis-aligned box covers **1.92× the area** of the oriented box it came from (p90 2.05×, above 1.5× on 83 % of cases). Most of what the detector returns for a tilted heart is not heart.
+An axis-aligned box has four degrees of freedom, `(x, y, w, h)`. An **oriented** box has five, `(cx, cy, w, h, θ)`, or eight if you store the corners directly — which is what FOCUS does, in the DOTA convention used by aerial-imagery detectors. That fifth number is not decoration here. It *is* the measurement: the whole point of the project is θ, and the box is just where it lives.
 
 ![Oriented box versus the axis-aligned box the detector is given](docs/figures/oriented_boxes.png)
 
-### The landmark algorithm
+YOLOv5 consumes axis-aligned boxes, so stage one is handed the grey rectangle and stage two has to put the angle back. The collapse is expensive:
+
+![Cost of dropping the angle, and what the orientation head recovers](docs/figures/obb_cost.png)
+
+The left panel is the area a detector receives relative to the true oriented box, plotted against the box's own orientation, with the analytic curve `(|cos θ| + k|sin θ|)(|sin θ| + k|cos θ|)/k` for the mean aspect ratio `k = b/a = 0.73` drawn through it. The cost is zero at 0° and 90° and peaks at 45°.
+
+**And the data sits at the peak.** The angles cluster around 45° and 135°, because that is where a fetal heart lies in a correctly obtained four-chamber view — the clinical normal cardiac axis showing up as a property of the annotation distribution. So the near-worst case is the ordinary case: the median collapse costs **×1.97** the box area, and for a tilted heart most of what the detector returns is not heart.
+
+The right panel is what the orientation head buys back. Rotated IoU of the predicted oriented box against the annotation has a median of **0.83**; the axis-aligned box scores **0.51** against the same target, sitting right on the threshold at which most detection benchmarks stop counting a box as correct.
+
+![Annotated and predicted oriented boxes across the angle range](docs/figures/obb_gallery.png)
+
+### Why oriented-box metrics are really angle metrics
+
+Rotated IoU falls off with angle error at a rate set entirely by the aspect ratio:
+
+![Rotated IoU against angle error, by aspect ratio](docs/figures/obb_iou_sensitivity.png)
+
+At 1:1 the angle is meaningless and IoU barely moves — a square has no orientation, which is the same degeneracy that makes the abstention rule check for roundness. At 4:1 a 10° error already costs a quarter of the IoU and 20° breaks the 0.5 threshold. At 8:1, 10° is nearly fatal. A fetal heart sits around 1.4:1, which is why its mAP looks forgiving and why mAP is the wrong metric to optimise here: **report the angle error directly**, because an IoU number on a near-square object hides everything you care about.
+
+### Why not train a rotated detector
+
+`mmrotate`, YOLO-OBB and the rest predict θ inside the detector, which would collapse the two stages into one. Three reasons this project does not:
+
+- **The angle is discontinuous.** θ is defined modulo 180°, so a naive regression head is punished enormously at the wrap, and near-square objects have no well-defined θ at all. The literature's fixes — a doubled-angle encoding, circular smooth labels, Gaussian-Wasserstein or KLD losses on the box treated as a 2-D Gaussian — all exist to work around that, and they are more machinery than a 300-image dataset can support.
+- **The angle would not be inspectable.** The landmark head returns four points a clinician can reject individually. A rotated detector returns a number.
+- **The stages fail differently and should be measured separately.** The detector's job is "is there a heart and roughly where", and it transfers to a second hospital at 93 % firing rate. The orientation's job is a precise geometric quantity, and it degrades sharply out of distribution. One number covering both would have hidden that.
+
+## The landmark algorithm
 
 Stage two regresses **four landmarks** — the endpoints of the cardiac ellipse's major and minor axes, ordered `[major+, major-, minor+, minor-]` — and reconstructs the oriented box and the angle from them. Landmarks rather than a scalar angle because the output is inspectable: a clinician can look at four points and say they are wrong, and localised evidence is worth more than a slightly better number in anything that has to be reviewed.
 
