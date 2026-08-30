@@ -2,7 +2,7 @@
 
 A two-stage pipeline on prenatal four-chamber ultrasound: find the heart, then estimate its long axis. The detection half took an afternoon and is not interesting. The estimation half took the rest of the time, failed three times for reasons worth writing down, and still is not accurate enough to measure anything clinically. This article is mostly about the third part.
 
-**Code:** [github.com/…/fetal-heart-orientation](#) · **Data:** [FOCUS](https://zenodo.org/records/14597550), CC-BY-4.0 · **Licence:** MIT
+**Code:** [github.com/francescovigni/fetal-cardiac-orientation](https://github.com/francescovigni/fetal-cardiac-orientation) · **Data:** [FOCUS](https://zenodo.org/records/14597550), CC-BY-4.0 · **Licence:** MIT
 
 ---
 
@@ -211,7 +211,7 @@ The transferable part is not the model, it is the harness: annotation cross-vali
 ## Reproducing
 
 ```bash
-git clone … && cd fetal-heart-orientation
+git clone https://github.com/francescovigni/fetal-cardiac-orientation.git && cd fetal-cardiac-orientation
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 make data && make test && make baselines
 make train && make eval && make meta

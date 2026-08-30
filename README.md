@@ -1,4 +1,4 @@
-# Fetal heart detection and orientation estimation
+# Fetal cardiac detection and orientation estimation
 
 Two stages on prenatal four-chamber ultrasound:
 
