@@ -1,47 +1,72 @@
 # Estimating fetal cardiac orientation, and knowing when it is wrong
 
-Find the heart in a prenatal four-chamber scan, then estimate its long axis. The detection half took an afternoon and is not interesting. The estimation half failed three times for reasons worth writing down, still is not accurate enough to measure anything clinically, and — this is the part I would keep — can be tested on a second hospital's data that has no orientation labels at all.
+There is a question that comes up whenever an imaging pipeline already exists and someone wants a new geometric measurement out of it:
 
-**Code:** [github.com/francescovigni/fetal-cardiac-orientation](https://github.com/francescovigni/fetal-cardiac-orientation) · **Data:** [FOCUS](https://zenodo.org/records/14597550) and [FETAL_PLANES_DB](https://zenodo.org/records/3904280), both CC-BY-4.0
+> **If the pipeline already finds the organ, can the orientation be read off directly — without training a network for it?**
 
-| | |
-|---|---|
-| Detects the fetal heart and thorax | mAP@50 **0.995**, recall 1.00, 14 ms/image |
-| Estimates the heart's long axis | median error **7.0°**, 95 % limits of agreement **±18°** |
-| Measures the clinical cardiac axis | **No.** That needs a spine landmark this dataset lacks |
-| Knows when it is wrong | **Not yet.** The abstention signals barely reduce error |
+For the fetal heart in a four-chamber ultrasound, the answer is **yes, if you have a mask, and only if you know how that mask fails**. This is the measured version of that answer, on public data, with the failure modes characterised rather than assumed.
 
-The clinical normal band for cardiac axis is roughly 40° wide, so ±18° is nearly half of it. A working method with an honest error bar, not an instrument.
+**Code:** [github.com/francescovigni/fetal-cardiac-orientation](https://github.com/francescovigni/fetal-cardiac-orientation) · **Data:** [FOCUS](https://zenodo.org/records/14597550) and [FETAL_PLANES_DB](https://zenodo.org/records/3904280), CC-BY-4.0
 
-## Why it is harder than it looks
+| Route | Input needed | Median error | Fails when |
+|---|---|---|---|
+| Second-order moments | a mask | **0.28°** clean, 0.2–1.7° under symmetric or ragged error | mass is added or removed **asymmetrically** — 21–45° |
+| Minimum-area rectangle | a mask | 4.95°, **44 % beyond 10°** | always, on near-elliptical shapes: it is bimodal |
+| Learned landmark model | only a box | **7.0°**, limits of agreement ±18° | out of distribution: p90 triples on a second hospital |
 
-Cardiac axis is the angle between the interventricular septum and the thoracic anteroposterior midline. It sits near 45° normally, and deviation is an independent screening marker for congenital heart disease.
+## Why the geometry is awkward before any of that
 
-Three properties make it awkward. It is **a difference of two angles**, and the thoracic reference is usually the noisier term, so an error budget that ignores it is optimistic. It is **axial, not directional**: an axis is defined modulo 180°, and turning it into a direction is levocardia versus dextrocardia, a diagnosis that needs the spine or the stomach bubble rather than a cropped heart. And **fetal lie is arbitrary**, so unlike a chest radiograph there is no canonical orientation, which makes rotation equivariance a property the model genuinely must have.
+Cardiac axis is the angle between the interventricular septum and the thoracic anteroposterior midline, near 45° normally, and deviation is an independent screening marker for congenital heart disease.
 
-## Checking the annotations before trusting them
+It is **a difference of two angles**, and the thoracic reference is usually the noisier term. It is **axial, not directional** — defined modulo 180°, and turning it into a direction is levocardia versus dextrocardia, a diagnosis needing the spine or stomach bubble rather than a cropped heart. And **fetal lie is arbitrary**, so there is no canonical orientation to lean on, which makes rotation equivariance a property the estimator genuinely must have.
 
-[FOCUS](https://zenodo.org/records/14597550) is 300 prenatal four-chamber images, 200/50/50. Each carries three parallel annotations for cardiac and thorax: an ellipse, an oriented box, and a mask. A public fetal dataset shipping native oriented boxes is unusual and is what made the project possible.
+## The closed-form route, and where it breaks
 
-Before using the ellipse angle as ground truth I checked it against the independently stored oriented box across all 200 training images: centre agrees to 0.07 px, semi-major to 0.09 px, angle to **0.033°**. That is thirty lines of code, and it is the difference between "the annotations are consistent" and "I assume they are". It also pinned the convention — `a` is the semi-major axis, `theta` its direction in image coordinates with y pointing down. Getting that wrong would have silently mirrored every angle in the project.
+Given a mask, the axis is the principal eigenvector of the covariance of the set pixels — probability-weighted if the mask is soft, and computed in physical units, because anisotropic pixel spacing skews the axis by the pixel aspect ratio. It is closed form, differentiable, and takes microseconds.
 
-Detection is table stakes and I will not dwell on it: one organ, one view, centred, always present, mAP@50 0.995 on both classes. The transferable part is the augmentation policy, which follows the physics rather than the defaults — rotation because fetal lie is arbitrary, no vertical flip because no probe swaps near and far field, no hue on grayscale, no mixup because blending two fetal hearts produces anatomy that does not exist.
+On the undamaged FOCUS masks it recovers the annotated angle to **0.28° median**. That number on its own would be dishonest: those masks are rasterised from the same ellipse annotations, so it measures the numerical consistency of the geometry code, not accuracy on a real segmenter's output.
 
-## Three failures, in order
+The informative experiment is what happens when the mask is wrong. `fho.no_training` degrades the ground-truth masks the way segmenters actually fail — systematic under- and over-segmentation, a ragged contour, a chunk lost to shadowing, neighbouring tissue leaking in — scores each corruption by Dice, and measures the resulting angle error.
 
-The orientation head regresses four landmarks, the endpoints of the cardiac ellipse's axes, and derives the axis from them. Landmarks rather than a scalar because the output is inspectable: a clinician can look at four points and say they are wrong, and nobody can audit a number. The [README](../README.md#the-landmark-algorithm) has the full algorithm. Three things had to fail first.
+![Angle error against mask quality and against failure mode](figures/no_training.png)
 
-**The 180° endpoint swap.** An ellipse is invariant under a 180° rotation, and that rotation exchanges both pairs of endpoints at once. Two labellings are equally correct, so any fixed convention is discontinuous somewhere, and under rotation augmentation the network receives contradictory targets for visually identical crops. It cannot learn. The fix is a loss that scores both assignments and keeps the better one per sample — the landmark analogue of encoding an axial angle as `(sin 2θ, cos 2θ)`, which cures the same disease in oriented-box regression.
+| Failure mode | Dice | raw mask | after cleanup |
+|---|---|---|---|
+| erosion | 0.77 | 0.22° | **0.22°** |
+| dilation | 0.82 | 0.40° | **0.40°** |
+| ragged contour | 0.66 | 40.20° | **1.72°** |
+| chunk missing | 0.83 | 20.87° | 21.13° |
+| adjacent tissue included | 0.87 | 46.21° | 44.73° |
 
-**Heatmaps are the wrong estimator for these landmarks.** The first version used per-landmark Gaussian heatmaps, the default choice, and plateaued at about 28° median error against 45° for random guessing on axial data. An ellipse axis endpoint has no distinctive local appearance: it is a point on a smooth boundary, defined by a global property of the shape, and a receptive field centred on it sees what it would see a few pixels along the contour. Heatmaps work when a landmark has local evidence — an apex, a valve hinge, a vertebral body. These have none.
+**Symmetric error is free.** Eroding or dilating until Dice falls to 0.77 costs 0.22°. Second moments do not care how thick the mask is, only how the mass is distributed — so the most common complaint about a segmenter turns out to be irrelevant to this measurement.
 
-**Global average pooling is almost orientation-invariant.** Pooling the final feature map to 1×1 discards the spatial layout, and the spatial layout is where the angle lives. Obvious in hindsight, and the last thing I looked at.
+**Two lines of cleanup are not optional.** Keeping the largest connected component and morphologically opening it takes a ragged contour from **40.2° to 1.7°**. Skip it and a noisy boundary destroys the estimate — and a detached blob does something worse than destroy it, because the extra mass *widens* the eigengap, so the estimator becomes more confident as it becomes wrong.
+
+**Asymmetric mass is what survives cleanup.** A missing chunk (21°) or tissue leaking across a contiguous boundary (45°) cannot be removed by connected components, because the spurious mass is attached. This is the failure to look for in any real segmenter, and it is what would decide whether the approach works on a given pipeline.
+
+**Dice does not predict the angle error.** A mask at Dice 0.87 gives 46°; a mask at Dice 0.77 gives 0.22°. The scatter on the left of the figure is a cloud, not a curve. "Our segmenter scores 0.9" does not answer "will the orientation be right".
+
+Two cautions that cut against the method:
+
+The **obvious confidence signal does not work**. PCA offers a first-order standard error from the eigengap, `Var(θ) ≈ λ₁λ₂/(λ₁−λ₂)²/n`, which ought to flag ill-conditioned cases. Its correlation with actual error across all corruptions is **r = +0.03**. It is fooled by precisely the failure that matters. Abstention has to come from elsewhere — a second estimator, or temporal consistency across frames of the same exam.
+
+And the **other closed-form estimator is a trap**. The minimum-area enclosing rectangle, from rotating calipers on the convex hull, is exact for area and unstable for axis: for an ellipse the enclosing rectangle reaches the same minimum `4ab` at both the major and the minor alignment, so it is genuinely bimodal and picks one of two optima 90° apart. Median 4.95°, and 44 % of cases beyond 10°, on undamaged masks. Picking the wrong closed-form estimator costs far more than not training one.
+
+## When there is no mask, only a box
+
+If the pipeline returns a box, the moments have nothing to work on and the angle must be learned. That is the rest of the repository: YOLOv5 for the cardiac and thoracic regions, then a landmark head predicting the endpoints of the cardiac ellipse's axes.
+
+Landmarks rather than a scalar angle because the output is inspectable — a clinician can look at four points and say they are wrong, and nobody can audit a number. Three things had to fail before it worked.
+
+**The 180° endpoint swap.** An ellipse is invariant under a 180° rotation, which exchanges both pairs of endpoints at once, so two labellings are equally correct and any fixed convention is discontinuous somewhere. Under rotation augmentation the network then receives contradictory targets for visually identical crops. The fix is a loss scoring both assignments and keeping the better one — the landmark analogue of the `(sin 2θ, cos 2θ)` encoding that cures the same disease in oriented-box regression.
+
+**Heatmaps are the wrong estimator for these landmarks.** Per-landmark Gaussian heatmaps, the default choice, plateaued at ~28° median against 45° for chance. An ellipse axis endpoint has no distinctive local appearance: it is a point on a smooth boundary defined by a global property of the shape. Heatmaps are right for an apex or a valve hinge and wrong here.
+
+**Global average pooling is almost orientation-invariant.** Pooling to 1×1 discards the spatial layout, which is where the angle lives.
 
 Measured on the same validation split: heatmaps 28°, global regression with average pooling 21°, global regression with a 3×3 spatial grid 4.4°.
 
-## Results, read honestly
-
-Test split, 50 images, 400 epochs on 200 training images.
+### Results, read honestly
 
 ```
 median |error|     7.04°   95 % CI [4.84, 9.26]
@@ -52,23 +77,19 @@ ICC(2,1)           0.980
 
 ![Bland-Altman and error distribution](figures/agreement.png)
 
-Four numbers saying four different things. The **bias of −0.55°** means no systematic rotation error, the failure that would matter most clinically and the one a mean absolute error hides. The **ICC of 0.980** is the flattering one: cardiac angles span a wide range and ICC rewards tracking it, so quoted alone it misleads. The **limits of agreement, ±18°**, are what a clinician would actually ask for. And the gap between **4.41° on validation and 7.04° on test**, with a bootstrap interval of [4.84, 9.26], says both that there is a real generalisation gap on 200 images and that the test estimate itself is loose. Training had not converged at 400 epochs.
+Four numbers saying four different things. The **bias of −0.55°** means no systematic rotation error, the failure that would matter most clinically and the one a mean absolute error hides. The **ICC of 0.980** is the flattering one — cardiac angles span a wide range and ICC rewards tracking it. The **limits of agreement, ±18°**, are what a clinician would ask for, against a clinical normal band roughly 40° wide. And the gap between **4.41° on validation and 7.04° on test**, with a bootstrap interval of [4.84, 9.26], says both that there is a real generalisation gap on 200 training images and that the test estimate is itself loose. Training had not converged.
 
-![Predicted axis against annotation: best, median and worst test cases](figures/qualitative.png)
+So the learned route is an order of magnitude worse than the closed-form one, and it exists only for the case where no mask is available.
 
-Stratifying says more than the headline. By roundness, 6.70° for `b/a` in 0.60–0.75 against 7.93° for 0.75–0.90 — rounder is harder, as the geometry predicts. By size, 9.26° at 90–120 px semi-major against 4.93° above 120 px. The size effect is the larger of the two: a few pixels of landmark error is several degrees on a small heart. That is the resolution argument appearing in data rather than in a paragraph.
-
-### The abstention signals do not work, and that is a result
-
-The model carries two internal consistency checks: the major and minor axes each vote for the angle, and a second head predicts it directly. Both disagreements are free confidence signals.
+Stratifying says more than the headline. By roundness, 6.70° for `b/a` in 0.60–0.75 against 7.93° for 0.75–0.90. By size, 9.26° at 90–120 px semi-major against 4.93° above 120 px — a few pixels of landmark error is several degrees on a small heart, which is the resolution argument appearing in data rather than in a paragraph.
 
 ![Risk-coverage for each candidate confidence signal](figures/risk_coverage.png)
 
-Neither buys much. Dropping to 53 % coverage moves the median from 7.04° to 5.40°, and the p90 barely moves. The best signal available is not either of them — it is simply **heart size**. Predicted elongation is worse than nothing: abstaining by it makes the median error rise. A confidence signal that does not reduce error is not a confidence signal, and shipping it as one would be worse than having none.
+The model's internal confidence signals do not work either. Dropping to 53 % coverage moves the median from 7.04° to 5.40°, and the p90 barely moves. The best signal available is not the two heads agreeing — it is simply **heart size**. Predicted elongation is worse than nothing: abstaining by it makes the median error rise. A confidence signal that does not reduce error is not a confidence signal.
 
 ## Validating without labels
 
-A held-out set is not the only instrument, and on 50 images it is a blunt one. Four properties can be asserted with no ground truth at all: rotate the input by δ and the axis must move by δ; mirror it and the axis must reflect; change brightness and contrast and the axis must not move, because neither is anatomy; widen the crop and it must not move.
+A held-out set is not the only instrument, and on 50 images it is a blunt one. Four properties can be asserted with no ground truth at all: rotate the input by δ and the axis must move by δ; mirror it and the axis must reflect; change brightness and contrast and it must not move, because neither is anatomy; widen the crop and it must not move.
 
 ```
 rotation equivariance ±15°   median 2.9–3.6°   p90  7.4–9.0°
@@ -78,17 +99,15 @@ gain invariance              median 0.74°      p90  3.90°   max 5.31°
 crop-scale invariance        median 3.65°      p90  8.63°
 ```
 
-Every one fails the tolerances set in the file. The tolerances were not relaxed to make them pass. Rotation self-consistency, 3° to 5°, is the same order as the model's own test error, so the residual is model variance rather than a coordinate bug. **Gain invariance is violated by up to 5°**: a pure brightness change moves an anatomical measurement, which points at stronger intensity augmentation and is not something a test set would ever have said.
+Every one fails the tolerances set in the file, and the tolerances were not relaxed to make them pass. Rotation self-consistency, 3° to 5°, is the same order as the model's own test error, so the residual is model variance rather than a coordinate bug. **Gain invariance is violated by up to 5°**: a pure brightness change moves an anatomical measurement, which is a concrete defect a test set would never have surfaced.
 
-The suite earned its place twice. The first run reported errors of exactly twice the applied rotation on every image, and errors of exactly 2δ are the signature of a flipped sign — which was in the test's own expected value. The expectation is now derived from the warp matrix itself, so the test has no convention left to get wrong. Then, run against a deliberately undertrained checkpoint, it gives rotation errors of almost exactly δ: the signature of a model predicting a near-constant angle regardless of input. Detecting "the model ignores the image" with no labels is what you want running as a monitor in production, where labels never arrive.
+The suite earned its place twice. Its first run reported errors of exactly twice the applied rotation on every image — errors of exactly 2δ being the signature of a flipped sign, which was in the test's own expected value. The expectation is now derived from the warp matrix itself, so the test has no convention left to get wrong. And run against a deliberately undertrained checkpoint it gives rotation errors of almost exactly δ: the signature of a model predicting a near-constant angle regardless of input. Detecting "the model ignores the image" with no labels is what you want running as a monitor in production, where labels never arrive.
 
-## Testing it somewhere else, with no labels
+## Testing it somewhere else, still with no labels
 
-The obvious objection is that this is 300 images from one source. The obvious answer is an external set, and the obvious obstacle is that orientation ground truth does not exist outside FOCUS.
+The obvious objection is 300 images from one source. The obvious obstacle to an external set is that orientation ground truth does not exist outside FOCUS. It does not matter, because those four properties hold on any image, so the same code runs unchanged on [FETAL_PLANES_DB](https://zenodo.org/records/3904280): a different hospital, different operators, four ultrasound machines, 1,718 images of the thorax plane.
 
-It does not matter, because those four properties hold on any image. The same code runs unchanged on [FETAL_PLANES_DB](https://zenodo.org/records/3904280): a different hospital, different operators, four ultrasound machines, 1,718 images of the thorax plane.
-
-The detector fires on **93 %** of them at mean confidence 0.75, having never seen the dataset. Then the orientation model:
+The detector fires on **93 %** of them at mean confidence 0.75, having never seen the dataset.
 
 | Property | median: FOCUS → external | p90: FOCUS → external |
 |---|---|---|
@@ -100,36 +119,28 @@ The detector fires on **93 %** of them at mean confidence 0.75, having never see
 
 ![Internal versus external self-consistency, and detection by machine](figures/external.png)
 
-The medians move modestly. The tails triple. That gap is the result: the model still works on typical external images and fails outright on a minority, and a summary reporting only a mean would have hidden it entirely.
+The medians move modestly. The tails triple. That gap is the result: the learned model still works on typical external images and fails outright on a minority, and a summary reporting only a mean would have hidden it. Crop-scale sensitivity going from 3.7° to 11.8° is the most specific finding — it says the model partly learned the FOCUS crop convention rather than the anatomy, which is a training-time fix. By machine, the detector fires on 95 % of Voluson E6 images and **81 % of Aloka** images at the lowest mean confidence of the four; Aloka is 41 % of the external dataset and appears nowhere in FOCUS.
 
-Crop-scale sensitivity going from 3.7° to 11.8° is the most specific finding. It says the model partly learned the FOCUS crop convention rather than the anatomy, which is a training-time fix, not a data problem. By machine, the detector fires on 95 % of Voluson E6 images and **81 % of Aloka** images at the lowest mean confidence of the four; Aloka is 41 % of the external dataset and appears nowhere in FOCUS.
-
-None of it required a single annotation.
-
-## An aside: PCA versus rotating calipers
-
-Two classical estimators for the axis of a shape. PCA takes it from the eigenvectors of the point covariance; rotating calipers over the convex hull returns the exact minimum-area rectangle. On the ground-truth masks, PCA gives 0.28° median error and minimum-area gives 4.95°, with 44 % of cases beyond 10°.
-
-Those failures are not noise. For an ellipse the enclosing rectangle has area `4·√(a²c²+b²s²)·√(a²s²+b²c²)`, which reaches the same minimum `4ab` at **both** the major and the minor alignment. The estimator is genuinely bimodal and picks one of two optima 90° apart. Minimum-area is exact for area and unstable for axis: they optimise different things, and the tightest box is not the best axis.
-
-One caveat that should not be buried: the FOCUS masks are rasterised from the same ellipse annotations, so 0.28° measures the numerical consistency of the geometry code, not clinical accuracy.
+It is worth putting the two routes side by side here. The closed-form estimator has no distribution to be out of: it is the same arithmetic on any mask from any machine, and its failure modes are geometric and enumerable. The learned model has to be re-validated on every new source. That asymmetry, more than the accuracy gap, is the argument for reading the angle off an existing segmentation whenever one exists.
 
 ## What this does not show
 
-- **Not the clinical cardiac axis.** It is the heart's long axis in the image frame; the clinical quantity is measured against the spine-to-sternum midline, and FOCUS annotates neither spine nor septum.
-- **±18° limits of agreement are not clinically useful** against a normal band roughly 40° wide.
-- **External evaluation covers self-consistency, not accuracy.** Without labels outside FOCUS, external error against a reference is unmeasured.
-- **No human ceiling.** Two readers measuring the same clips disagree by some amount, and no model beats that. Without it, 7° has no reference point.
-- **No gestational-age stratification.** 300 training images, one source.
+- **Not the clinical cardiac axis.** It is the heart's long axis in the image frame; the clinical quantity is measured against the spine-to-sternum midline, and FOCUS annotates neither spine nor septum. The function that would combine them is written and needs one spine landmark.
+- **The closed-form results are against simulated segmentation failure**, not against a real segmenter's output. The corruptions are plausible and parameterised, but they are a model of failure, not a sample of one.
+- **±18° limits of agreement are not clinically useful** for the learned route.
+- **External evaluation covers self-consistency, not accuracy** — there are no orientation labels outside FOCUS.
+- **No human reader ceiling**, so 7° has no reference point. No gestational-age stratification.
 - **Not a medical device**, and not validated for clinical use.
 
 ## What would close the gap
 
-Annotate one spine point on the 300 images. A single-point pass is a couple of hours and converts every number here into the clinical quantity; the function that consumes it is already written. Then measure both error terms separately, because the midline term is expected to dominate and optimising the heart term first would be wasted effort. Establish the reader ceiling — two or three clinicians measuring the same clips, one measuring twice — so the target is a number rather than an aspiration. Evaluate the decision rather than the angle: abnormal axis, yes or no, at the normative cut-off, since a 3° error is irrelevant mid-band and decisive at the boundary. And fix the crop-scale and gain sensitivities that the metamorphic suite has already localised.
+Annotate one spine point on the 300 images — a couple of hours, and it converts every number here into the clinical quantity. Measure both error terms separately afterwards, because the midline is expected to dominate and optimising the heart term first would be wasted effort. Establish the reader ceiling with two or three clinicians measuring the same clips and one measuring twice, so the target is a number rather than an aspiration. Evaluate the decision rather than the angle — abnormal axis, yes or no, at the normative cut-off, since a 3° error is irrelevant mid-band and decisive at the boundary. And run the degradation study against a real segmenter's masks rather than simulated ones, which is a day's work once such a segmenter exists.
 
 ## What this would take on your data
 
-The transferable part is the harness, not the model: annotation cross-validation, the swap-invariant loss, agreement statistics instead of accuracy, stratification by the covariate that actually breaks the estimator, risk-coverage for abstention, and label-free equivariance tests that double as a deployment monitor and as a cross-dataset generalisation probe. On a labelled in-house set that is roughly a two-week piece of work, and the first week goes on counting confirmed positives per class before any modelling starts.
+If a segmentation already exists, the closed-form route is an afternoon: moments, the two-line cleanup, and the degradation study run against your own segmenter's failures rather than simulated ones, which tells you immediately whether it is good enough. If only a detection box exists, it is a two-week piece of work, and the first week goes on counting confirmed positives per class before any modelling starts.
+
+The transferable part is not the model. It is the harness: annotation cross-validation before trusting labels, a swap-invariant loss for the axial ambiguity, agreement statistics instead of accuracy, stratification by the covariate that actually breaks the estimator, risk-coverage for abstention, and label-free equivariance tests that double as a deployment monitor and as a cross-dataset generalisation probe.
 
 ## Reproducing
 
@@ -137,8 +148,9 @@ The transferable part is the harness, not the model: annotation cross-validation
 git clone https://github.com/francescovigni/fetal-cardiac-orientation.git
 cd fetal-cardiac-orientation
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
-make data test baselines && make yolo train && make eval meta figures
-make data-external external
+make data test baselines no-training      # the closed-form route, no GPU needed
+make yolo train eval meta figures         # the learned route
+make data-external external               # the cross-dataset run
 ```
 
 Verified from a clean clone in an empty environment: unit tests pass, the dataset downloads, the annotation cross-check reproduces to the same 0.033°, the baselines reproduce exactly, and training runs on CPU as well as MPS.

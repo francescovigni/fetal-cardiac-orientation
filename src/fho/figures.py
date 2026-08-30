@@ -382,6 +382,61 @@ def fig_obb_gallery(rows, out: Path, n=8):
     plt.close(fig)
 
 
+def fig_no_training(out: Path, json_path: Path):
+    """Orientation from a segmentation, against how that segmentation fails.
+
+    Left: angle error against Dice.  The point is that the cloud is not a curve —
+    Dice does not determine the error, so "our segmenter scores 0.9" is not an
+    answer to "will the orientation be right".
+
+    Right: the same data grouped by failure mode.  Symmetric errors are free,
+    a ragged contour is fixed by two lines of cleanup, and asymmetric mass —
+    a missing chunk or tissue leaking in — is not fixable and is what to watch for.
+    """
+    import json
+    from collections import defaultdict
+
+    rows = json.loads(Path(json_path).read_text())
+    by = defaultdict(list)
+    for r in rows:
+        by[r["corruption"]].append(r)
+    names = list(by)
+    cols = dict(zip(names, SERIES + ["#9c6644", "#6a4c93"]))
+
+    fig, (a1, a2) = plt.subplots(1, 2, figsize=(8.6, 3.2),
+                                 gridspec_kw={"width_ratios": [1.15, 1]})
+    for name in names:
+        rs = by[name]
+        a1.scatter([r["dice"] for r in rs], [max(r["err_cleaned"], 1e-2) for r in rs],
+                   s=11, alpha=0.55, lw=0, color=cols[name], label=name)
+    a1.set_yscale("log")
+    a1.axhline(5, color="#9aa0a6", lw=0.8, ls=":")
+    a1.set_xlabel("Dice of the segmentation against truth")
+    a1.set_ylabel("angle error, cleaned (deg, log)")
+    a1.set_title("Dice does not determine the angle error", fontsize=9)
+    a1.legend(fontsize=6.2, loc="lower left", ncol=2)
+
+    x = np.arange(len(names))
+    w = 0.38
+    raw, clean = [], []
+    for name in names:
+        worst = max(r["level"] for r in by[name])
+        sel = [r for r in by[name] if r["level"] == worst]
+        raw.append(np.median([r["err_moments"] for r in sel]))
+        clean.append(np.median([r["err_cleaned"] for r in sel]))
+    a2.bar(x - w / 2, raw, w, color="#9aa0a6", label="raw mask")
+    a2.bar(x + w / 2, clean, w, color=PRED, label="largest component + opening")
+    for i, (r_, c_) in enumerate(zip(raw, clean)):
+        a2.text(i + w / 2, c_ + 1.2, f"{c_:.1f}°", ha="center", fontsize=6.2)
+    a2.set_xticks(x, [n.replace(" ", "\n") for n in names], fontsize=6.8)
+    a2.set_ylabel("median angle error at the harshest level (deg)")
+    a2.set_title("Two lines of cleanup, and what they cannot fix", fontsize=9)
+    a2.legend(fontsize=6.5)
+    fig.tight_layout()
+    fig.savefig(out / "no_training.png", bbox_inches="tight")
+    plt.close(fig)
+
+
 def main(a):
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -395,6 +450,8 @@ def main(a):
     fig_obb_cost(rows, out, samples)
     fig_obb_gallery(rows, out)
     fig_iou_sensitivity(out)
+    if Path(a.no_training_json).exists():
+        fig_no_training(out, Path(a.no_training_json))
     if Path(a.focus_json).exists() and Path(a.external_json).exists():
         fig_external(out, Path(a.focus_json), Path(a.external_json))
     print(f"wrote {len(list(out.glob('*.png')))} figures to {out}")
@@ -408,4 +465,6 @@ if __name__ == "__main__":
     p.add_argument("--out", default="docs/figures")
     p.add_argument("--focus-json", dest="focus_json", default="runs/metamorphic_focus.json")
     p.add_argument("--external-json", dest="external_json", default="runs/external.json")
+    p.add_argument("--no-training-json", dest="no_training_json",
+                   default="runs/no_training.json")
     main(p.parse_args())

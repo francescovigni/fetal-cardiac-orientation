@@ -1,7 +1,7 @@
 VENV := .venv/bin
 export PYTHONPATH := src
 
-.PHONY: setup data data-external yolo-data yolo train eval meta external figures test baselines all
+.PHONY: setup data data-external yolo-data yolo train eval meta external no-training figures test baselines all
 
 setup:
 	python3 -m venv .venv && $(VENV)/pip install -q -r requirements.txt
@@ -29,6 +29,9 @@ data-external:
 
 external:
 	$(VENV)/python -m fho.external --n 500 --by-machine --json runs/external.json
+
+no-training:
+	$(VENV)/python -m fho.no_training --split test --json runs/no_training.json
 
 figures:
 	$(VENV)/python -m fho.figures
