@@ -1,0 +1,9 @@
+data/raw/
+data/processed/
+runs/
+yolov5/
+__pycache__/
+*.pt
+*.zip
+.venv/
+.DS_Store

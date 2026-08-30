@@ -1,0 +1,8 @@
+# YOLOv5 data config — generated paths are absolute after prepare_yolo.py
+path: ../data/processed/yolo
+train: images/train
+val: images/val
+test: images/test
+names:
+  0: cardiac
+  1: thorax

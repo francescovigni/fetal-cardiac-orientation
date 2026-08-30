@@ -1,0 +1,30 @@
+# YOLOv5 hyperparameters tuned for grayscale fetal ultrasound.
+# Rationale for the non-defaults is in README §"Augmentation".
+lr0: 0.005
+lrf: 0.05
+momentum: 0.937
+weight_decay: 0.0005
+warmup_epochs: 5.0
+warmup_momentum: 0.8
+warmup_bias_lr: 0.1
+box: 0.05
+cls: 0.3
+cls_pw: 1.0
+obj: 0.7
+obj_pw: 1.0
+iou_t: 0.20
+anchor_t: 4.0
+fl_gamma: 0.0
+hsv_h: 0.0        # grayscale: hue/sat jitter is meaningless
+hsv_s: 0.0
+hsv_v: 0.4        # gain / brightness DOES vary between machines -> keep
+degrees: 30.0     # fetal lie is arbitrary -> rotation is physically legitimate
+translate: 0.1
+scale: 0.35       # depth setting varies
+shear: 0.0
+perspective: 0.0
+flipud: 0.0       # vertical flip would invert near/far field -> not physical
+fliplr: 0.5       # left-right flip is a valid fetal lie (changes situs semantics only)
+mosaic: 0.7
+mixup: 0.0
+copy_paste: 0.0
