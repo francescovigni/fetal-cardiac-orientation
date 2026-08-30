@@ -39,12 +39,17 @@ def load_landmark_model(ckpt: Path):
     return model, CropSpec(**state["spec"])
 
 
-def detect_heart(yolo_weights: Path, image_path: Path, conf: float = 0.25):
-    """Run YOLOv5 and return the highest-confidence 'cardiac' box, or None."""
+def detect_heart(yolo_weights: Path, image_path: Path, conf: float = 0.25,
+                 repo: Path = Path("yolov5")):
+    """Run YOLOv5 and return the highest-confidence 'cardiac' box, or None.
+
+    Loaded from the local checkout (``source="local"``) so inference works
+    offline and pins the exact code that trained the weights.
+    """
     import torch
 
-    model = torch.hub.load("ultralytics/yolov5", "custom",
-                           path=str(yolo_weights), verbose=False)
+    model = torch.hub.load(str(repo), "custom", path=str(yolo_weights),
+                           source="local", verbose=False)
     model.conf = conf
     det = model(str(image_path)).xyxy[0].cpu().numpy()
     cardiac = det[det[:, 5] == 0]
@@ -93,7 +98,8 @@ def orientation_from_box(model, spec: CropSpec, image: np.ndarray,
 def main(a):
     img = np.asarray(cv2.imread(str(a.image), cv2.IMREAD_GRAYSCALE), np.float32) / 255.0
     model, spec = load_landmark_model(Path(a.ckpt))
-    box = detect_heart(Path(a.yolo), Path(a.image), a.conf) if a.yolo else None
+    box = (detect_heart(Path(a.yolo), Path(a.image), a.conf, Path(a.repo))
+           if a.yolo else None)
     if box is None:
         h, w = img.shape
         box = (w * 0.25, h * 0.25, w * 0.75, h * 0.75)
@@ -107,4 +113,5 @@ if __name__ == "__main__":
     p.add_argument("--yolo", default="runs/yolo/focus/weights/best.pt")
     p.add_argument("--ckpt", default="runs/landmarks/landmarks_best.pt")
     p.add_argument("--conf", type=float, default=0.25)
+    p.add_argument("--repo", default="yolov5")
     main(p.parse_args())

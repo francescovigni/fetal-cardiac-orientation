@@ -61,7 +61,6 @@ class LandmarkNet(nn.Module):
                                    nn.Dropout(0.1))
         self.coord_head = nn.Linear(256, k * 2)
         self.axis_head = nn.Linear(256, 2)
-        self.size = None  # filled on first forward, used to scale normalised coords
 
     def forward(self, x):
         s = x.shape[-1]
