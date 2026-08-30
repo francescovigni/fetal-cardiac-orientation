@@ -110,6 +110,11 @@ Sequence on the same split: **heatmaps 28° → global pooling 21° → spatial 
 >
 > Against §3, the learned route is roughly an order of magnitude worse. It exists only for the case where no mask is available.
 
+> **Q.** Do the landmarks earn their place, or would a direct angle head do as well?
+> **M.** The network already carries a second head predicting `(sin 2θ, cos 2θ)` directly on the same backbone. Evaluate both on the same test split.
+> **R.** Landmarks 7.04° median; direct head **5.64°**. Their absolute errors correlate at **r = +0.79**.
+> **I.** The direct head is marginally *better*, so landmarks are not justified by accuracy. They are justified by what a scalar cannot provide: an output a reviewer can reject point by point, an oriented box and aspect ratio for free, and two votes whose disagreement is a confidence signal. The r = +0.79 is the other half of the story — the heads share a backbone and tend to fail together, which is exactly why head disagreement is a weak abstention signal in §9, and an argument for a genuinely independent second estimator rather than a second head.
+
 Stratified, the size effect dominates the shape effect: 9.26° at 90–120 px semi-major versus 4.93° above 120 px, against 6.70° / 7.93° across roundness bands. A few pixels of landmark error is several degrees on a small heart.
 
 ---

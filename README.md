@@ -82,16 +82,7 @@ Two orders of magnitude better than the learned model — *when a mask exists*. 
 
 **Oriented vs axis-aligned boxes** — median rotated IoU **0.83** vs **0.51**; collapsing the annotation to axis-aligned costs **×1.97 the box area**.
 
-**External, cross-dataset** (FETAL_PLANES_DB, no labels used)
-
-| | FOCUS | external |
-|---|---|---|
-| detector fires | — | **93 %** @ conf 0.75 |
-| rotation ±30°, median | 3.7–4.7° | 5.3–6.5° |
-| rotation ±30°, **p90** | 10.0–12.5° | **29.2–39.6°** |
-| crop-scale invariance | 3.65° | **11.82°** |
-
-**Medians move a little; the tails triple.** Works on typical external images, fails outright on a minority — a distinction an average erases.
+Cross-dataset results have their own section below.
 
 ---
 
@@ -110,9 +101,44 @@ Two orders of magnitude better than the learned model — *when a mask exists*. 
 ![Bland-Altman and error distribution](docs/figures/agreement.png)
 ![Angle error against mask quality and against failure mode](docs/figures/no_training.png)
 
-**Cross-dataset behaviour, measured without labels.**
+---
+
+## Results on data the model has never seen
+
+The model was trained on 300 images from a single source. The obvious question is whether it survives a different hospital — and the obvious obstacle is that **no other public fetal dataset carries orientation labels**.
+
+It does not matter, because the properties an orientation estimator must satisfy hold on *any* image: rotate the input by δ and the axis must move by δ; mirror it and the axis must reflect; change brightness and the axis must not move at all. So the same test suite runs unchanged on **FETAL_PLANES_DB** — a different hospital, different operators, four ultrasound machines, **1,718 thorax-plane images, none of them trained on, none of them labelled for this task**.
 
 ![Internal versus external self-consistency, and detection by machine](docs/figures/external.png)
+
+### Detection transfers
+
+**93 %** firing rate at mean confidence 0.75, on a dataset the detector has never seen. Split by manufacturer:
+
+| Machine | share of set | detector fires | mean confidence |
+|---|---|---|---|
+| Voluson E6 | 77 % | **95 %** | 0.75 |
+| Aloka | 16 % | **81 %** | **0.70** |
+| Voluson S10 | 5 % | 100 % | 0.80 |
+| Other | 2 % | 100 % | 0.85 |
+
+Aloka is 41 % of the source dataset and appears **nowhere** in FOCUS — and it is the manufacturer where the detector is weakest, on both firing rate and confidence. That is domain shift showing up as a measurable, attributable number rather than as a caveat.
+
+### Orientation degrades in the tail, not the median
+
+| Property | median: FOCUS → external | p90: FOCUS → external |
+|---|---|---|
+| rotation ±15° | 2.9–3.6° → 3.9–4.3° | 7.4–9.0° → **20.5–21.9°** |
+| rotation ±30° | 3.7–4.7° → 5.3–6.5° | 10.0–12.5° → **29.2–39.6°** |
+| mirror | 2.6° → 6.5° | 12.0° → **44.3°** |
+| gain | 0.7° → 2.0° | 3.9° → 8.0° |
+| crop scale | 3.7° → **11.8°** | 8.6° → **44.0°** |
+
+**The medians move modestly. The tails triple.** The model still works on typical external images and fails outright on a minority — a distinction that any mean-based summary would have erased completely. Reporting only "median error rose from 3.7° to 5.3°" would have been true and deeply misleading.
+
+**The most specific finding is crop-scale sensitivity**, 3.7° → 11.8°. The model partly learned the FOCUS *crop convention* rather than the anatomy. That is a training-time fix — wider crop jitter — and it was found without a single annotation.
+
+**Contrast with the closed-form route.** The moments estimator has no distribution to be out of: identical arithmetic on any mask from any machine, with failure modes that are geometric and enumerable rather than empirical. That asymmetry, more than the raw accuracy gap, is the argument for reading the angle off a segmentation whenever one exists.
 
 ---
 
@@ -150,18 +176,40 @@ Symmetric error is free. Two lines of cleanup (largest connected component + ope
 
 ## Why landmarks, not direct angle regression
 
-Four points instead of one number buy: an **inspectable** output a reviewer can reject point by point; an **oriented box for free** (`c ± u ± v` from the axis half-vectors); and **two independent votes** — major endpoints give the axis directly, minor endpoints give it rotated 90°, a negation in doubled-angle space, so their disagreement is a confidence signal at no cost. Direction is deliberately not predicted: apex-left vs apex-right is levocardia vs dextrocardia, a diagnosis needing the spine or stomach bubble.
+The model could simply output the angle. It is worth being precise about why it does not — and about what that choice costs, because it does cost something.
+
+**The alternative was implemented and measured.** The network carries a second head that predicts the doubled angle `(sin 2θ, cos 2θ)` directly, trained jointly on the same backbone. On the same test split:
+
+| Route | median | mean | p90 |
+|---|---|---|---|
+| landmarks → geometric reconstruction | 7.04° | 7.39° | 12.92° |
+| **direct doubled-angle head** | **5.64°** | **6.58°** | **11.43°** |
+
+**The direct head is slightly better.** Landmarks are not chosen for accuracy — they are chosen for four things a scalar cannot give:
+
+1. **An inspectable output.** A reviewer can look at four points and say *that one is wrong*. Nobody can audit a number. When the estimate is off, the landmarks say *how*: a rotated axis looks different from a collapsed one, and both look different from a mislocated crop.
+2. **Geometry for free.** Centre `(p₀+p₁)/2`, half-axes `u=(p₀−p₁)/2` and `v=(p₂−p₃)/2`, corners `c ± u ± v`. The oriented bounding box, the aspect ratio and the size all come out of the same prediction, with no extra head and no extra supervision.
+3. **Two independent votes.** The major endpoints give the axis directly; the minor endpoints give it rotated by 90°, which is a negation in doubled-angle space. Their disagreement is a confidence signal at zero cost — and the reconstruction averages them, which is why the landmark route is the reported one.
+4. **Cheap targets.** The four points are derived analytically from the ellipse annotation the dataset already ships. No extra labelling was needed to get an interpretable representation.
+
+**And an honest caveat on the pair.** The two heads' absolute errors correlate at **r = +0.79** — they share a backbone, so they tend to fail together. That is precisely why head disagreement turns out to be a weak abstention signal (see Failure analysis), and it is an argument for a genuinely independent second estimator rather than a second head.
+
+**Direction is deliberately not predicted.** Apex-left versus apex-right is levocardia versus dextrocardia — a diagnosis needing the spine, the stomach bubble or the descending aorta, none of which is inside a cropped heart. The system reports an axis and abstains from the sign rather than guessing it.
+
+**Why not a rotated detector.** `mmrotate` / YOLO-OBB would predict θ inside the detector and collapse the two stages. Reasonable, not chosen: θ periodicity and the near-square degeneracy need machinery (doubled-angle encodings, circular smooth labels, Gaussian-Wasserstein losses) that 200 training images do not support; a rotated detector returns a number rather than rejectable points; and detection and orientation fail differently — detection transfers to a second hospital at 93 %, orientation degrades sharply — which one combined metric would hide. Related: rotated-IoU sensitivity scales with aspect ratio, so on a near-square heart **mAP looks forgiving and hides the quantity of interest**.
+
+### Architecture
 
 ```
 input 192×192×1
   └─ 5 × [stride-2 conv-BN-SiLU, conv-BN-SiLU]  32→256 ch   (/32 → 6×6)
       └─ AdaptiveAvgPool2d(3)          3×3 spatial grid, NOT 1×1
           └─ Linear(2304→256) + SiLU + Dropout
-              ├─ coord head  Linear(256→8), tanh   → 4 × (x, y)
-              └─ axis head   Linear(256→2), L2-norm → (sin 2θ, cos 2θ)
+              ├─ coord head  Linear(256→8), tanh   → 4 × (x, y)   ← reported
+              └─ axis head   Linear(256→2), L2-norm → (sin 2θ, cos 2θ)  ← consistency check
 ```
 
-**Loss:** swap-invariant coordinate L1 (an ellipse is invariant under 180°, which exchanges *both* endpoint pairs, so two labellings are equally correct and any fixed convention is discontinuous — the loss scores both permutations and keeps the better one), plus an angular `1 − cos` term on the coordinate-derived axis and on the direct head. AdamW, OneCycle, 400 epochs on 200 images. Device auto-selected: MPS → CUDA → CPU.
+**Loss:** swap-invariant coordinate L1 — an ellipse is invariant under a 180° rotation, which exchanges *both* endpoint pairs, so two labellings are equally correct and any fixed convention is discontinuous somewhere; the loss scores both permutations and keeps the better one per sample. Plus an angular `1 − cos` term on the coordinate-derived axis and on the direct head. AdamW, OneCycle, 400 epochs on 200 images. Device auto-selected: MPS → CUDA → CPU.
 
 **Augmentation follows the physics:** rotation ±180° (fetal lie is arbitrary), horizontal flip yes, **vertical flip no** (would swap near and far field — no probe does that), gain yes (varies by machine), **hue/saturation no** (grayscale), **mixup no** (blending two fetal hearts produces anatomy that does not exist).
 
@@ -183,12 +231,6 @@ Negative results are kept — they are what the experimentation produced, and wh
 | **A sign error in the test itself** | errors of exactly 2δ | Expectations now derive from the warp matrix, not a convention |
 
 Run against a deliberately **undertrained** checkpoint, the metamorphic suite returns rotation errors of almost exactly δ — the signature of a model predicting a constant angle regardless of input. Detecting "the model ignores the image" without ground truth is what a deployment monitor needs.
-
----
-
-## Why not a rotated detector
-
-`mmrotate` / YOLO-OBB would collapse the two stages. Reasonable, not chosen: **θ periodicity plus dataset size** (the doubled-angle encodings, circular smooth labels and Gaussian-Wasserstein losses that exist to handle it are more than 200 images support); **interpretability** (four rejectable points vs one number); and **separable failure modes** — detection transfers at 93 %, orientation degrades sharply, and one combined metric would have hidden that. Related: rotated-IoU sensitivity scales with aspect ratio, so on a near-square heart **mAP looks forgiving and hides the quantity of interest**.
 
 ---
 
