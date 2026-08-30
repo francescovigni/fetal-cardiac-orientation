@@ -62,6 +62,19 @@ PYTHONPATH=src python -m fho.prepare_yolo          # -> data/processed/yolo (300
 ./scripts/train_yolo.sh
 ```
 
+Result on the held-out test split, YOLOv5s, 150 epochs, 640 px:
+
+| Class | P | R | mAP@50 | mAP@50-95 |
+|---|---|---|---|---|
+| all | 0.994 | 1.000 | 0.995 | 0.649 |
+| cardiac | 0.990 | 1.000 | 0.995 | 0.637 |
+| thorax | 0.999 | 1.000 | 0.995 | 0.660 |
+
+14 ms per image on an M-series GPU. These numbers are unremarkable and should be
+read as such: one organ, one view, centred, always present. Detection is not the
+hard part of this problem, and a detector that scored anything else would mean
+something was wrong with the labels.
+
 Two classes are kept, not one. The thorax box is what a cardiothoracic ratio needs, and it is the reference frame the clinical cardiac axis is measured against.
 
 ### Augmentation
