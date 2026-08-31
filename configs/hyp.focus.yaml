@@ -18,7 +18,9 @@ fl_gamma: 0.0
 hsv_h: 0.0        # grayscale: hue/sat jitter is meaningless
 hsv_s: 0.0
 hsv_v: 0.4        # gain / brightness DOES vary between machines -> keep
-degrees: 30.0     # fetal lie is arbitrary -> rotation is physically legitimate
+degrees: 180.0    # fetal lie is arbitrary, AND the pipeline de-rotates by up to 90
+                  # deg downstream; 30.0 was the original value and left the detector
+                  # unable to re-detect past ~45 deg — see fho.roundtrip
 translate: 0.1
 scale: 0.35       # depth setting varies
 shear: 0.0

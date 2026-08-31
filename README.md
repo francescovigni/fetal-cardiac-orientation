@@ -65,8 +65,8 @@ Two independent routes to the same measurement, so each checks the other.
 
 | Detection | mAP@50 | mAP@50-95 | | Orientation (learned) | |
 |---|---|---|---|---|---|
-| cardiac | **0.995** | 0.637 | | median error | **7.04°** (CI 4.84–9.26) |
-| thorax | **0.995** | 0.660 | | Bland–Altman bias | **−0.55°** |
+| cardiac | **0.985** | 0.597 | | median error | **7.04°** (CI 4.84–9.26) |
+| thorax | 0.979 | 0.545 | | Bland–Altman bias | **−0.55°** |
 | | 14 ms/img | | | 95 % limits of agreement | **±18°** |
 | | | | | ICC(2,1) | 0.980 |
 
@@ -216,6 +216,38 @@ input 192×192×1
 
 ---
 
+## Closing the loop: a test that composes the stages
+
+Every test above examines one stage on ground-truth inputs. This one runs the deployed path and feeds it back into itself:
+
+```
+detect  →  estimate θ  →  rotate the image so the heart is axis-aligned
+        →  detect again  →  estimate θ again
+```
+
+If the first estimate were exact, the second must read zero. The residual is a label-free measure of the **composed** system, and it needs no annotation.
+
+**It immediately found a defect that no unit-level test could see.** Re-detection after de-rotation, stratified by how much rotation the de-rotation actually applies:
+
+| applied \|rotation\| | 0–30° | 30–45° | 45–70° | 70–91° |
+|---|---|---|---|---|
+| re-detected, `degrees: 30` | 100 % | 100 % | **24 %** | **0 %** |
+| re-detected, `degrees: 180` | 100 % | 100 % | **100 %** | **100 %** |
+
+Point-biserial correlation between applied rotation and re-detection, before the fix: **r = −0.75**.
+
+**Root cause.** The detector was augmented over ±30° and the orientation model over ±180°. Each choice is defensible in isolation — but a heart sitting at 45–135° needs a rotation of up to 90° to be de-rotated, and nobody derived what stage 2 would ask of stage 1. That is a design-reasoning gap rather than a careless setting, and it is invisible until the stages are composed.
+
+**Cost of the fix.** Retraining the detector with `degrees: 180` moves cardiac mAP@50 from 0.995 to 0.985 and re-detection from 52 % to **100 %** overall. Cheap, and the corrected value is now the shipped default.
+
+**One trap the fix exposed.** The round-trip residual got *worse* after the fix, 8.64° → 12.80° median. It is not a regression: before, the residual could only be computed on the 52 % that re-detected — the easy, low-rotation cases. Fixing re-detection returned the hard cases to the sample. A metric degrading because the population got harder is worth catching before it is reported as a result.
+
+**Stage attribution, for free.** A control run warps by a *random* angle and measures from the known box: residual 4.36° against 12.80° for the round trip, which uses the *re-detected* box. The gap is what stage-1 localisation variance costs the final angle — and it says the orientation model is not the dominant error term here.
+
+⚠️ **A constant-zero estimator passes this test trivially**, since de-rotating by zero is the identity. It is a necessary condition only, meaningful alongside rotation equivariance, which a constant predictor fails by construction. There is a test named for this so it cannot be over-read.
+
+---
+
 ## Failure analysis
 
 Negative results are kept — they are what the experimentation produced, and what selected the design.
@@ -229,6 +261,7 @@ Negative results are kept — they are what the experimentation produced, and wh
 | **Model confidence barely helps** | 53 % coverage: 7.04° → 5.40°, p90 flat | Best signal is heart size; predicted elongation is worse than nothing |
 | **Crop-scale shortcut** | 3.65° → 11.82° external | Partly learned the crop convention, not the anatomy |
 | **Tails, not means, degrade** | p90 10–12° → 29–40° | Report tails and covariates |
+| **Stages augmented over inconsistent rotation ranges** | re-detection 100 % → 24 % → 0 % across a 45° threshold, r = −0.75 | Unit tests pass while the composed pipeline fails; derive each stage's requirements from the one downstream |
 | **A sign error in the test itself** | errors of exactly 2δ | Expectations now derive from the warp matrix, not a convention |
 
 Run against a deliberately **undertrained** checkpoint, the metamorphic suite returns rotation errors of almost exactly δ — the signature of a model predicting a constant angle regardless of input. Detecting "the model ignores the image" without ground truth is what a deployment monitor needs.
@@ -243,6 +276,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
 make data test baselines     # FOCUS download, 9 unit tests, closed-form estimators
 make yolo train              # detector, then the landmark model
 make no-training             # closed-form orientation under simulated segmentation failure
+make roundtrip               # closed-loop: detect → orient → de-rotate → detect → orient
 make eval meta figures       # agreement stats, metamorphic suite, all figures
 make data-external external  # cross-dataset run (2.1 GB download)
 ```
@@ -281,6 +315,7 @@ src/fho/
 ├── no_training.py      simulated segmentation failure → angle-error propagation
 ├── evaluate.py         Bland–Altman, ICC, stratification, risk-coverage, bootstrap CIs
 ├── metamorphic.py      label-free equivariance and invariance tests
+├── roundtrip.py        closed-loop consistency across both stages
 ├── external.py         cross-dataset run, stratified by ultrasound machine
 ├── figures.py          every figure, regenerated from the checkpoints
 └── predict.py          end-to-end detection → crop → landmarks → angle
@@ -306,6 +341,7 @@ src/fho/
 - **Interpretability is a choice in the prediction target**, not a post-hoc explanation.
 - **Confidence estimates need empirical validation.** The theoretically motivated one scored r = +0.03; shipping it would have been worse than shipping nothing.
 - **Negative experiments select architectures.** Heatmaps at 28° and global pooling at 21° are what identified the 3×3 grid.
+- **Compose the stages before trusting either.** Both passed their own tests while the pipeline asked the detector for rotations it was never trained on. The bug only existed in the seam.
 - **Properties can be tested where labels cannot** — and the same tests keep working after deployment.
 
 ---

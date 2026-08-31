@@ -163,7 +163,36 @@ The suite justified itself twice in ways a held-out set could not. Its first run
 
 ---
 
-## 8. What the oriented box is worth
+## 8. Closing the loop: composing the stages
+
+> **Q.** Every test so far examines one stage on ground-truth inputs. Does the *composed* pipeline hold together?
+>
+> **M.** Run the deployed path and feed it back into itself: detect, estimate θ, rotate the full image so the heart is axis-aligned, detect again, estimate again. If the first estimate were exact the second must read zero, so the residual measures the whole system with no labels. A control run warps by a *random* angle instead, which verifies the warp algebra independently of the model — if the control fails, the measurement is broken rather than the network.
+>
+> **R.** Re-detection after de-rotation, stratified by the rotation actually applied:
+>
+> | applied \|rotation\| | 0–30° | 30–45° | 45–70° | 70–91° |
+> |---|---|---|---|---|
+> | `degrees: 30` (original) | 100 % | 100 % | **24 %** | **0 %** |
+> | `degrees: 180` (corrected) | 100 % | 100 % | **100 %** | **100 %** |
+>
+> Point-biserial correlation between applied rotation and re-detection, before the fix: **r = −0.75**. Overall re-detection 52 % → **100 %**; re-detected centre displacement 12.5 px → 7.4 px. Cardiac mAP@50 moves 0.995 → 0.985.
+>
+> **I.** The detector was augmented over ±30° and the orientation model over ±180°. Each is defensible in isolation, and a heart at 45–135° needs up to 90° of rotation to be de-rotated — so the pipeline routinely asked stage 1 for something it had never seen. Not a careless setting: a **design-reasoning gap**, in which each stage's augmentation was chosen without deriving what the stage downstream would demand. It is invisible to unit tests by construction, because it exists only in the seam.
+
+Three secondary observations, each of which would have been easy to report wrongly.
+
+**The residual got worse after the fix**, 8.64° → 12.80° median. It is not a regression. Before the fix the residual could only be computed on the 52 % that re-detected — the easy, low-rotation cases — and repairing re-detection returned the hard cases to the sample. A metric degrading because the population got harder is a trap worth catching before publication.
+
+**The control gives stage attribution for free.** The control warps by a random angle and measures from the known box: 4.36° median residual, against 12.80° for the round trip, which measures from the *re-detected* box. The gap is what stage-1 localisation variance costs the final angle, and it says the orientation model is not the dominant error term in the composed system.
+
+**The test needed debugging before it could debug the model.** Its first version re-detected on the tight 192 px crop and reported 10 % — measuring the scale and context shift rather than rotation, since the detector was trained on hearts inside a full scene. Rotating the full image made rotation the only variable.
+
+> ⚠️ **Necessary, not sufficient.** A constant-zero estimator passes this test trivially: de-rotating by zero is the identity. The round trip is meaningful only alongside rotation equivariance (§6), which a constant predictor fails by construction. A test named `test_roundtrip_is_trivially_passed_by_a_constant_estimator` exists to keep that limitation visible in the code rather than only in prose.
+
+---
+
+## 9. What the oriented box is worth
 
 > **Q.** What does collapsing the oriented annotation to axis-aligned cost, and what does the orientation head recover?
 > **M.** Area ratio between each oriented box's enclosing axis-aligned box and the oriented box, across all 300 images, against orientation. Rotated IoU (convex-polygon intersection) of the annotation against both the predicted oriented box and the axis-aligned box.
@@ -179,7 +208,7 @@ A consequence for metric choice: rotated IoU decays with angle error at a rate s
 
 ---
 
-## 9. Confidence, tested rather than assumed
+## 10. Confidence, tested rather than assumed
 
 > **Q.** Does the eigengap standard error of the PCA estimator identify unreliable predictions?
 > **M.** Correlate `Var(θ) ≈ λ₁λ₂/(λ₁−λ₂)²/n` against actual angle error across every corruption in §4.
@@ -194,7 +223,7 @@ A consequence for metric choice: rotated IoU decays with angle error at a rate s
 
 ---
 
-## 10. Limitations
+## 11. Limitations
 
 - **Not the clinical cardiac axis.** That is measured against the thoracic spine-to-sternum midline; FOCUS annotates neither spine nor septum. `geometry.cardiac_axis()` needs one additional landmark.
 - **±18° limits of agreement are not clinically useful** against a ~40°-wide normal band.
@@ -207,11 +236,13 @@ A consequence for metric choice: rotated IoU decays with angle error at a rate s
 
 ---
 
-## 11. Conclusions
+## 12. Conclusions
 
 **Orientation does not have to be learned.** Where a segmentation exists, second-order moments recover the axis analytically, two orders of magnitude more accurately than the trained model, with no distribution to be out of and with failure modes that are geometric and enumerable. The learned landmark model earns its place only when a detector returns a box and no mask.
 
 **The most useful findings needed no labels.** The gain-invariance violation, the crop-scale shortcut and the external tail degradation all came from property tests that transfer to any dataset and keep working after deployment. Two more — the heatmap failure and the pooling failure — came from experiments that returned negative results and thereby selected the architecture.
+
+**The only defect found rather than characterised came from composing the stages.** Detector and orientation model each passed their own tests while the pipeline asked the detector for rotations it had never been trained on. Unit-level testing cannot see a seam.
 
 **Several things that should have worked did not.** A theoretically motivated uncertainty correlated with error at r = +0.03, and the model's own consistency signals bought almost no accuracy through abstention. Both are reported rather than dropped: a pipeline that cannot tell when it is wrong is a different product from one that can, and the difference is only visible if measured.
 
