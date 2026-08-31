@@ -69,3 +69,54 @@ def test_orientation_from_a_box_returns_a_complete_record(fake_focus, tmp_path):
     assert len(r["landmarks"]) == 4
     assert isinstance(r["assessable"], bool)
     assert np.isfinite(r["roundness"])
+
+
+def test_roundtrip_warp_algebra_is_exact(ellipse_mask):
+    """Detect → orient → de-rotate → orient, with a closed-form estimator.
+
+    Exercises the round-trip machinery without a trained model: de-rotating a
+    shape by its own measured angle must leave a shape whose measured angle is
+    the image of that angle under the warp.  If this fails, the coordinate
+    algebra is wrong and any residual reported by ``fho.roundtrip`` is noise.
+    """
+    from fho import geometry as G
+    from fho.roundtrip import residual_after_derotation
+
+    for theta in (12.0, 37.0, 81.0, 152.0):
+        m, _ = ellipse_mask(a=70.0, b=25.0, theta=theta)
+        img = (m > 0).astype(np.float32)
+        measured = G.mask_axis(img)["angle"]
+
+        r = residual_after_derotation(
+            img,
+            cx=200.0,
+            cy=150.0,
+            angle_deg=measured,
+            half_size=110.0,
+            out=192,
+            measure=lambda crop: G.mask_axis(crop)["angle"],
+        )
+        assert r["residual"] < 2.0, f"theta={theta}: residual {r['residual']:.2f}°"
+
+
+def test_roundtrip_is_trivially_passed_by_a_constant_estimator(ellipse_mask):
+    """Documents the limitation, so nobody reads the round trip as sufficient.
+
+    An estimator that always returns zero makes the de-rotation the identity and
+    scores a perfect residual while carrying no information at all.  The round
+    trip is a necessary condition; rotation equivariance is what rules this out.
+    """
+    from fho.roundtrip import residual_after_derotation
+
+    m, _ = ellipse_mask(a=70.0, b=25.0, theta=37.0)
+    img = (m > 0).astype(np.float32)
+    r = residual_after_derotation(
+        img,
+        cx=200.0,
+        cy=150.0,
+        angle_deg=0.0,
+        half_size=110.0,
+        out=192,
+        measure=lambda crop: 0.0,
+    )
+    assert r["residual"] == pytest.approx(0.0, abs=1e-9)
