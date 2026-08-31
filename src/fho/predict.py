@@ -102,6 +102,41 @@ def orientation_from_box(
     )
 
 
+def annotate(image: np.ndarray, result: dict, out_path: Path) -> None:
+    """Draw the detection, the landmarks and the reconstructed axis onto the frame."""
+    canvas = cv2.cvtColor((np.clip(image, 0, 1) * 255).astype(np.uint8), cv2.COLOR_GRAY2BGR)
+    x0, y0, x1, y1 = (int(v) for v in result["box"])
+    cv2.rectangle(canvas, (x0, y0), (x1, y1), (154, 160, 166), 1)
+
+    pts = np.array(result["landmarks"], float)
+    centre = pts[:2].mean(0)
+    for i, p_ in enumerate(pts):
+        cv2.circle(canvas, (int(p_[0]), int(p_[1])), 5, (81, 111, 231), -1 if i < 2 else 1)
+
+    u = (pts[0] - pts[1]) / 2
+    v = (pts[2] - pts[3]) / 2
+    corners = np.stack([centre + u + v, centre + u - v, centre - u - v, centre - u + v])
+    cv2.polylines(canvas, [corners.astype(np.int32)], True, (143, 157, 42), 2)
+    cv2.line(
+        canvas, tuple((centre - u).astype(int)), tuple((centre + u).astype(int)), (81, 111, 231), 2
+    )
+
+    label = f"{result['angle_deg']:.1f} deg"
+    if not result["assessable"]:
+        label += "  (not assessable)"
+    cv2.putText(
+        canvas,
+        label,
+        (x0, max(y0 - 10, 18)),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.7,
+        (81, 111, 231),
+        2,
+        cv2.LINE_AA,
+    )
+    cv2.imwrite(str(out_path), canvas)
+
+
 def main(a):
     img = np.asarray(cv2.imread(str(a.image), cv2.IMREAD_GRAYSCALE), np.float32) / 255.0
     model, spec = load_landmark_model(Path(a.ckpt))
@@ -110,7 +145,11 @@ def main(a):
         h, w = img.shape
         box = (w * 0.25, h * 0.25, w * 0.75, h * 0.75)
         print("# no detection — falling back to a centre crop", flush=True)
-    print(json.dumps(orientation_from_box(model, spec, img, box), indent=1))
+    result = orientation_from_box(model, spec, img, box)
+    print(json.dumps(result, indent=1))
+    if a.save:
+        annotate(img, result, Path(a.save))
+        print(f"# wrote {a.save}")
 
 
 if __name__ == "__main__":
@@ -120,4 +159,5 @@ if __name__ == "__main__":
     p.add_argument("--ckpt", default="runs/landmarks/landmarks_best.pt")
     p.add_argument("--conf", type=float, default=0.25)
     p.add_argument("--repo", default="yolov5")
+    p.add_argument("--save", default="", help="write an annotated PNG here")
     main(p.parse_args())

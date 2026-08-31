@@ -220,6 +220,7 @@ Two notes so the table is not misread. The min-area gap is *mine*, not the algor
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
 
+make weights demo            # trained checkpoints + a working example, no training
 make data test baselines     # FOCUS download, unit tests, closed-form estimators
 make yolo train              # detector, then the landmark model
 make no-training roundtrip   # segmentation-failure study, closed-loop consistency
@@ -227,11 +228,28 @@ make eval meta figures bench # agreement stats, metamorphic suite, figures, cost
 make data-external external  # cross-dataset run (2.1 GB download)
 ```
 
-Single-image inference:
+**Try it in 30 seconds, without training anything:**
 
 ```bash
-PYTHONPATH=src .venv/bin/python -m fho.predict --image path/to/scan.png
-# {"angle_deg": 63.37, "roundness": 0.69, "head_disagreement_deg": 5.20, "assessable": true}
+make demo     # fetches the checkpoints from the latest release, runs on a bundled sample
+```
+
+![Demo output: detection, landmarks and reconstructed oriented box](docs/figures/demo.png)
+
+```json
+{"angle_deg": 127.24, "roundness": 0.69,
+ "axis_disagreement_deg": 1.32, "head_disagreement_deg": 3.39, "assessable": true}
+```
+
+The bundled image is a **median case, not a showcase**: annotated 138.6°, predicted
+127.2° end to end — see [docs/sample](docs/sample/) for why that image was chosen and
+what the 4.5° difference between the end-to-end and ground-truth-crop predictions
+attributes to stage 1.
+
+Any other image:
+
+```bash
+PYTHONPATH=src .venv/bin/python -m fho.predict --image path/to/scan.png --save out.png
 ```
 
 **Tested in CI on every push** — Python 3.11/3.12/3.13, CPU-only, **63 tests on synthetic FOCUS-shaped fixtures** so nothing downloads and no test silently skips when the data is absent. Coverage spans annotation parsing, the affine crop's image/landmark consistency, swap-invariance of the loss, the estimators' characteristic failure modes, agreement statistics across the 180° wrap, and a two-epoch training run. `ruff` enforces lint and formatting; a link checker fails the build on a renamed figure; tagged commits gate a release on the full suite.
