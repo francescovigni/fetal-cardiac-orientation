@@ -120,3 +120,17 @@ def test_roundtrip_is_trivially_passed_by_a_constant_estimator(ellipse_mask):
         measure=lambda crop: 0.0,
     )
     assert r["residual"] == pytest.approx(0.0, abs=1e-9)
+
+
+def test_benchmark_runs_and_reports_sane_numbers():
+    """The cost table in the README must stay reproducible, so its source runs in CI."""
+    from fho.bench import bench_closed_form, bench_landmark
+
+    land = bench_landmark(size=192, width=8, batch=2)
+    assert 0.0 < land["params_m"] < 5.0
+    assert land["cpu_ms"] > 0.0 and land["crops_per_s"] > 0.0
+
+    closed = bench_closed_form()
+    assert closed["pca_error_deg"] < 1.0, "moments must recover a clean ellipse"
+    assert closed["minarea_error_deg"] > 45.0, "min-area is bimodal on an ellipse"
+    assert closed["pca_ms"] > 0.0 and closed["cleanup_ms"] > 0.0

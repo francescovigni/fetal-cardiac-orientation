@@ -1,7 +1,7 @@
 VENV := .venv/bin
 export PYTHONPATH := src
 
-.PHONY: setup data data-external yolo-data yolo train eval meta external no-training roundtrip figures test baselines all
+.PHONY: setup data data-external yolo-data yolo train eval meta external no-training roundtrip bench figures test baselines all
 
 setup:
 	python3 -m venv .venv && $(VENV)/pip install -q -r requirements.txt
@@ -37,6 +37,9 @@ no-training:
 
 roundtrip:
 	$(VENV)/python -m fho.roundtrip --json runs/roundtrip.json
+
+bench:
+	$(VENV)/python -m fho.bench --detector runs/yolo/focus/weights/best.pt --json runs/bench.json
 
 figures:
 	$(VENV)/python -m fho.figures

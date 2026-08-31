@@ -67,7 +67,7 @@ Two independent routes to the same measurement, so each checks the other.
 |---|---|---|---|---|---|
 | cardiac | **0.985** | 0.597 | | median error | **7.04°** (CI 4.84–9.26) |
 | thorax | 0.979 | 0.545 | | Bland–Altman bias | **−0.55°** |
-| | 14 ms/img | | | 95 % limits of agreement | **±18°** |
+| | 30 ms/img | | | 95 % limits of agreement | **±18°** |
 | | | | | ICC(2,1) | 0.980 |
 
 Detection is table stakes — one organ, one view, always present. The orientation model is essentially unbiased but ±18° against a clinical normal band roughly 40° wide: a working method with an honest error bar, not an instrument.
@@ -277,6 +277,7 @@ make data test baselines     # FOCUS download, 9 unit tests, closed-form estimat
 make yolo train              # detector, then the landmark model
 make no-training             # closed-form orientation under simulated segmentation failure
 make roundtrip               # closed-loop: detect → orient → de-rotate → detect → orient
+make bench                   # parameters, latency and throughput for every stage
 make eval meta figures       # agreement stats, metamorphic suite, all figures
 make data-external external  # cross-dataset run (2.1 GB download)
 ```
@@ -316,10 +317,43 @@ src/fho/
 ├── evaluate.py         Bland–Altman, ICC, stratification, risk-coverage, bootstrap CIs
 ├── metamorphic.py      label-free equivariance and invariance tests
 ├── roundtrip.py        closed-loop consistency across both stages
+├── bench.py            parameters, latency and throughput per stage
 ├── external.py         cross-dataset run, stratified by ultrasound machine
 ├── figures.py          every figure, regenerated from the checkpoints
 └── predict.py          end-to-end detection → crop → landmarks → angle
 ```
+
+---
+
+## Computational cost
+
+Measured on an M-series laptop with `make bench`, which regenerates every number below.
+
+| Stage | Params | Latency |
+|---|---|---|
+| YOLOv5s detection | 7.02 M | **29.6 ms** end to end @ 640 px (14 ms of it inference; the rest letterboxing and NMS) |
+| LandmarkNet | 2.95 M | **0.90 ms** GPU · 2.85 ms CPU @ 192 px · 11.8 MB of weights |
+| — batch-32, CPU only | | 153 ms → **209 crops/s**, no GPU required |
+| **Raw frame → angle** | ~10 M | **≈30 ms**, dominated entirely by the detector |
+
+The closed-form route, on a full-resolution frame with a 17.7 k-pixel mask:
+
+| Operation | This repo | OpenCV equivalent | Error |
+|---|---|---|---|
+| moments / PCA axis | 2.18 ms | **0.52 ms** | **0.02°** |
+| cleanup (largest component + open) | 0.81 ms | — | — |
+| min-area rectangle | 72.6 ms | **0.64 ms** | **90.00°** |
+
+**Orientation from an existing mask costs ≈1.3 ms** — around 1 % of what the segmentation that produced the mask already cost. The cost argument and the accuracy argument point the same way: the closed-form route is both two orders of magnitude more accurate on clean masks and an order of magnitude cheaper.
+
+Two implementation notes, so the table is not misread:
+
+- **The min-area gap is mine, not the algorithm's.** `geometry.py` deliberately imports no cv2, so its convex hull is a pure-Python monotone chain written for clarity. Rotating calipers is not inherently expensive — `cv2.minAreaRect` does it in 0.64 ms. It still loses on accuracy, and the benchmark demonstrates it live: **exactly 90.00° of error on this ellipse**, the bimodality described above, reproduced every run.
+- **The PCA gap buys something.** `cv2.moments` is 4× faster on a hard binary mask, but takes neither probability weights for a soft mask nor physical pixel spacing. Both matter here, so 0.52 ms is the floor, not a free win.
+
+**Training cost, in total:** the detector is ~25–30 min for 150 epochs and the landmark model ~12–15 min for 400, both on 200 images on a laptop. **The entire project trains in under an hour with no cloud and no rented GPU.** The largest single cost is the 2.1 GB external dataset download.
+
+**For deployment**, 30 ms/frame sits inside real-time for ultrasound at 30–60 fps, and the 2.85 ms CPU figure matters more than the GPU one: the orientation head needs no accelerator at all, so on-device is plausible before any quantisation or pruning.
 
 ---
 
